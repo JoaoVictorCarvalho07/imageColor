@@ -40,6 +40,20 @@ export async function r2Upload(
 }
 
 /**
+ * Gera URL assinada para PUT direto do browser ao R2.
+ * Permite upload sem passar pelo Vercel (contorna o limite de 4.5MB).
+ */
+export async function r2PresignedPutUrl(
+  bucket: string,
+  key: string,
+  contentType: string,
+  expiresIn = 3600,
+): Promise<string> {
+  const cmd = new PutObjectCommand({ Bucket: bucket, Key: key, ContentType: contentType });
+  return getSignedUrl(r2, cmd, { expiresIn });
+}
+
+/**
  * Gera URL assinada para acesso temporário a um objeto privado.
  * `filename` adiciona Content-Disposition: attachment (para download).
  */

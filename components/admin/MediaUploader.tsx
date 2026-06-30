@@ -8,6 +8,7 @@ export function MediaUploader({ galleryId }: { galleryId: string }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
   const [previews, setPreviews] = useState<string[]>([]);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -23,25 +24,49 @@ export function MediaUploader({ galleryId }: { galleryId: string }) {
     setBusy(true);
     setMsg(null);
 
-    const fd = new FormData();
-    arr.forEach((f) => fd.append("files", f));
-
+    let done = 0;
     try {
-      const res = await fetch(`/api/admin/ensaios/${galleryId}/upload`, {
-        method: "POST",
-        body: fd,
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        setMsg({ ok: false, text: `Erro: ${json.error ?? res.status}` });
-      } else {
-        setMsg({ ok: true, text: `${json.count} arquivo(s) processado(s) ✓` });
-        router.refresh();
+      for (let i = 0; i < arr.length; i++) {
+        const file = arr[i];
+        const label = arr.length > 1 ? ` ${i + 1}/${arr.length}` : "";
+
+        // 1. Obtém URL assinada para PUT direto ao R2 (sem passar pelo Vercel)
+        setStatus(`Enviando${label}…`);
+        const presignRes = await fetch(
+          `/api/admin/ensaios/${galleryId}/presign?` +
+            new URLSearchParams({ filename: file.name, type: file.type }),
+        );
+        if (!presignRes.ok) throw new Error("Falha ao iniciar upload");
+        const { uploadUrl, originalKey, mediaId } = await presignRes.json();
+
+        // 2. PUT direto ao R2 — contorna o limite de 4.5 MB do Vercel
+        const putRes = await fetch(uploadUrl, {
+          method: "PUT",
+          body: file,
+          headers: { "Content-Type": file.type },
+        });
+        if (!putRes.ok) throw new Error(`Erro no upload para R2 (${putRes.status})`);
+
+        // 3. Servidor baixa do R2, aplica watermark e gera thumb
+        setStatus(`Processando${label}…`);
+        const processRes = await fetch(`/api/admin/ensaios/${galleryId}/upload`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ originalKey, mediaId, filename: file.name, contentType: file.type }),
+        });
+        if (!processRes.ok) {
+          const json = await processRes.json().catch(() => ({}));
+          throw new Error(json.error ?? `Erro ao processar (${processRes.status})`);
+        }
+        done++;
       }
-    } catch {
-      setMsg({ ok: false, text: "Falha no envio." });
+      setMsg({ ok: true, text: `${done} arquivo(s) processado(s) ✓` });
+      router.refresh();
+    } catch (err) {
+      setMsg({ ok: false, text: err instanceof Error ? err.message : "Falha no envio." });
     } finally {
       setBusy(false);
+      setStatus("");
       localUrls.forEach((u) => URL.revokeObjectURL(u));
       setPreviews([]);
       if (inputRef.current) inputRef.current.value = "";
@@ -70,7 +95,7 @@ export function MediaUploader({ galleryId }: { galleryId: string }) {
           ) : (
             <UploadCloud className="h-4 w-4" />
           )}
-          {busy ? "Processando…" : "Adicionar fotos/vídeos"}
+          {busy ? status || "Enviando…" : "Adicionar fotos/vídeos"}
         </button>
         {msg && (
           <span className={`text-sm ${msg.ok ? "text-accent" : "text-destructive"}`}>
