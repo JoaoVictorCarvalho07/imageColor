@@ -11,6 +11,8 @@ import { MediaUploader } from "@/components/admin/MediaUploader";
 import { DriveImport } from "@/components/admin/DriveImport";
 import { SelectionFilenames } from "@/components/admin/SelectionFilenames";
 import { DeliveryManager } from "@/components/admin/DeliveryManager";
+import { MediaGrid } from "@/components/admin/MediaGrid";
+import { DeleteGalleryButton } from "@/components/admin/DeleteGalleryButton";
 import { previewUrl } from "@/lib/storageUrl";
 
 const STATUS: Record<string, { label: string; bg: string; fg: string }> = {
@@ -96,7 +98,10 @@ export default async function EnsaioDetailPage({
     status: string;
     position: number;
   };
-  const mediaRows = (media ?? []) as MediaRow[];
+  const mediaRows = (media ?? []).map((m: MediaRow) => ({
+    ...m,
+    thumbUrl: previewUrl(m.thumb_key),
+  }));
   const photos = mediaRows.filter((m) => m.type === "photo").length;
   const videos = mediaRows.filter((m) => m.type === "video").length;
 
@@ -142,6 +147,7 @@ export default async function EnsaioDetailPage({
           >
             {s.label}
           </span>
+          <DeleteGalleryButton galleryId={gallery.id} redirectTo="/admin" />
         </div>
       </div>
 
@@ -193,32 +199,7 @@ export default async function EnsaioDetailPage({
           ou envie do computador
         </p>
         <MediaUploader galleryId={gallery.id} />
-        {mediaRows.length > 0 && (
-          <div className="mt-4 grid grid-cols-3 gap-2 sm:grid-cols-6">
-            {mediaRows.slice(0, 18).map((m) => {
-              const url = previewUrl(m.thumb_key);
-              return (
-                <div
-                  key={m.id}
-                  className="relative aspect-square overflow-hidden rounded-md border border-border bg-secondary"
-                >
-                  {url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={url}
-                      alt=""
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
-                      {m.type === "video" ? "vídeo" : "…"}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
+        <MediaGrid galleryId={gallery.id} initialItems={mediaRows} />
         <p className="mt-3 text-xs text-muted-foreground">
           As fotos recebem marca d&apos;água automaticamente, e o nome de cada
           arquivo é guardado — assim você cruza a seleção com os RAWs.

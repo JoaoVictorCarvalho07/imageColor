@@ -2,6 +2,8 @@ import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
+  DeleteObjectCommand,
+  DeleteObjectsCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
@@ -71,6 +73,23 @@ export async function r2SignedUrl(
       : {}),
   });
   return getSignedUrl(r2, cmd, { expiresIn });
+}
+
+/** Exclui um objeto do R2. Silencioso se já não existir. */
+export async function r2Delete(bucket: string, key: string): Promise<void> {
+  await r2.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+}
+
+/** Exclui múltiplos objetos do R2 em lotes de 1000. */
+export async function r2DeleteMany(bucket: string, keys: string[]): Promise<void> {
+  if (keys.length === 0) return;
+  for (let i = 0; i < keys.length; i += 1000) {
+    const batch = keys.slice(i, i + 1000);
+    await r2.send(new DeleteObjectsCommand({
+      Bucket: bucket,
+      Delete: { Objects: batch.map((k) => ({ Key: k })) },
+    }));
+  }
 }
 
 /** Baixa um objeto do R2 e retorna como Buffer. */

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Plus, Images, Clock, FolderOpen, ExternalLink } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { formatDateBR } from "@/lib/format";
+import { DeleteGalleryButton } from "@/components/admin/DeleteGalleryButton";
 
 type GalleryRow = {
   id: string;
@@ -105,6 +106,7 @@ export default async function DashboardPage() {
                     >
                       <ExternalLink className="h-3.5 w-3.5" /> ver galeria
                     </Link>
+                    <DeleteGalleryButton galleryId={g.id} />
                   </div>
                 </li>
               );
