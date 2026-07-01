@@ -1,0 +1,10 @@
+node_modules/
+.next/
+out/
+dist/
+.git/
+coverage/
+public/
+*.min.js
+*.map
+*.lock
