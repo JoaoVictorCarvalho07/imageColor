@@ -208,7 +208,10 @@ const collections = [
   {
     name: "drive_connections",
     fields: [
-      { name: "google_account_email", type: "email", required: true },
+      // Informativo (qual conta foi conectada). NÃO pode ser obrigatório: se
+      // o /userinfo do Google falhar, o campo vem vazio e a conexão inteira
+      // seria rejeitada.
+      { name: "google_account_email", type: "email", required: false },
       { name: "refresh_token_encrypted", type: "text", required: true, max: 2000 },
       ...autodate,
     ],

@@ -1,7 +1,8 @@
 /**
  * Confere o schema REAL no servidor contra o que o app espera.
  *
- *   node --env-file=.env.local scripts/pb-verify.mjs
+ *   node --env-file=.env.local scripts/pb-verify.mjs         # só reporta
+ *   node --env-file=.env.local scripts/pb-verify.mjs --fix   # aplica
  *
  * Existe porque `pb-setup.mjs` pula coleções já criadas: se o schema mudou
  * depois da primeira execução, o setup diz "ok" sem aplicar nada.
@@ -16,7 +17,7 @@ if (!PB_URL || !EMAIL || !PASSWORD) {
   process.exit(1);
 }
 
-/** relação → cascadeDelete esperado. */
+/** `coleção.campo` → propriedades que precisam bater. */
 const expected = {
   "media_items.gallery": { cascadeDelete: true },
   "pricing_plans.gallery": { cascadeDelete: true },
@@ -26,6 +27,9 @@ const expected = {
   // Referências laterais: apagar a foto/plano NÃO pode apagar a seleção.
   "selections.media": { cascadeDelete: false },
   "selections.contracted_plan": { cascadeDelete: false },
+  // Informativo — se o /userinfo do Google falhar, vem vazio e obrigatório
+  // faria a conexão inteira do Drive ser rejeitada.
+  "drive_connections.google_account_email": { required: false },
 };
 
 const auth = await fetch(
@@ -50,24 +54,31 @@ const problems = [];
 
 for (const col of items) {
   for (const f of col.fields ?? []) {
-    if (f.type !== "relation") continue;
     const key = `${col.name}.${f.name}`;
     const want = expected[key];
     if (!want) continue;
-
-    const actual = Boolean(f.cascadeDelete);
-    const ok = actual === want.cascadeDelete;
-    console.log(
-      `${ok ? "✓" : "✗"} ${key.padEnd(34)} cascadeDelete=${String(actual).padEnd(5)}` +
-        (ok ? "" : `  ESPERADO ${want.cascadeDelete}`),
-    );
-    if (!ok) problems.push({ collectionId: col.id, col: col.name, field: f.name, want });
     delete expected[key];
+
+    const wrong = Object.entries(want).filter(
+      ([prop, value]) => Boolean(f[prop]) !== value,
+    );
+
+    const shown = Object.keys(want)
+      .map((p) => `${p}=${Boolean(f[p])}`)
+      .join(" ");
+
+    if (wrong.length === 0) {
+      console.log(`✓ ${key.padEnd(40)} ${shown}`);
+    } else {
+      const esperado = wrong.map(([p, v]) => `${p}=${v}`).join(" ");
+      console.log(`✗ ${key.padEnd(40)} ${shown}  ESPERADO ${esperado}`);
+      problems.push({ collectionId: col.id, col: col.name, field: f.name, want });
+    }
   }
 }
 
 for (const missing of Object.keys(expected)) {
-  console.log(`✗ ${missing.padEnd(34)} NÃO ENCONTRADA`);
+  console.log(`✗ ${missing.padEnd(40)} NÃO ENCONTRADO`);
   problems.push({ missing });
 }
 
@@ -77,29 +88,27 @@ if (problems.length === 0) {
 }
 
 console.log(`\n${problems.length} divergência(s).`);
-if (process.argv.includes("--fix")) {
-  console.log("Corrigindo…");
-  for (const p of problems) {
-    if (p.missing) continue;
-    const col = items.find((c) => c.id === p.collectionId);
-    const fields = col.fields.map((f) =>
-      f.name === p.field ? { ...f, cascadeDelete: p.want.cascadeDelete } : f,
-    );
-    const res = await fetch(`${PB_URL}/api/collections/${col.id}`, {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: auth.token,
-      },
-      body: JSON.stringify({ fields }),
-    });
-    console.log(
-      res.ok
-        ? `  ✓ ${p.col}.${p.field} → cascadeDelete=${p.want.cascadeDelete}`
-        : `  ✗ ${p.col}.${p.field}: ${JSON.stringify(await res.json())}`,
-    );
-  }
-} else {
+
+if (!process.argv.includes("--fix")) {
   console.log("Rode de novo com --fix para aplicar.");
   process.exit(1);
+}
+
+console.log("Corrigindo…");
+for (const p of problems) {
+  if (p.missing) continue;
+  const col = items.find((c) => c.id === p.collectionId);
+  const fields = col.fields.map((f) =>
+    f.name === p.field ? { ...f, ...p.want } : f,
+  );
+  const res = await fetch(`${PB_URL}/api/collections/${col.id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Authorization: auth.token },
+    body: JSON.stringify({ fields }),
+  });
+  console.log(
+    res.ok
+      ? `  ✓ ${p.col}.${p.field}`
+      : `  ✗ ${p.col}.${p.field}: ${JSON.stringify(await res.json())}`,
+  );
 }

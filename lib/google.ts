@@ -1,7 +1,12 @@
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const DRIVE_FILES = "https://www.googleapis.com/drive/v3/files";
-const SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+// `userinfo.email` é o que permite descobrir QUAL conta foi conectada — sem
+// ele o endpoint /oauth2/v2/userinfo responde 403.
+const SCOPE = [
+  "https://www.googleapis.com/auth/drive.readonly",
+  "https://www.googleapis.com/auth/userinfo.email",
+].join(" ");
 
 function env(name: string): string {
   const v = process.env[name];

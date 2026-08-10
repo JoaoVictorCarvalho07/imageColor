@@ -38,9 +38,13 @@ export async function GET(req: NextRequest) {
       const info = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
         headers: { Authorization: `Bearer ${tokens.access_token}` },
       });
-      if (info.ok) email = ((await info.json()) as { email?: string }).email ?? null;
-    } catch {
-      // opcional — ignora
+      if (info.ok) {
+        email = ((await info.json()) as { email?: string }).email ?? null;
+      } else {
+        console.warn("[drive/callback] userinfo falhou:", info.status);
+      }
+    } catch (err) {
+      console.warn("[drive/callback] userinfo indisponível:", err);
     }
 
     const pb = await superuserPb();
@@ -60,7 +64,10 @@ export async function GET(req: NextRequest) {
 
     jar.delete("drive_oauth_state");
     return back(req, "connected");
-  } catch {
+  } catch (err) {
+    // Sem isto o `drive=error` vira um buraco negro: o erro real (troca do
+    // code, validação do PocketBase) some e não há como diagnosticar.
+    console.error("[drive/callback] falhou:", err);
     return back(req, "error");
   }
 }
