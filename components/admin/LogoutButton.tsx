@@ -2,15 +2,16 @@
 
 import { useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
+import { browserPb, ADMIN_COOKIE } from "@/lib/pb/browser";
 
 export function LogoutButton() {
   const router = useRouter();
   return (
     <button
       type="button"
-      onClick={async () => {
-        await createClient().auth.signOut();
+      onClick={() => {
+        browserPb().authStore.clear();
+        document.cookie = `${ADMIN_COOKIE}=; path=/; max-age=0`;
         router.push("/admin/login");
         router.refresh();
       }}

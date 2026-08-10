@@ -1,7 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createClient } from "@/lib/supabase/server";
+import { getAdminUser } from "@/lib/pb/session";
+import { superuserPb } from "@/lib/pb/superuser";
+import { setGalleryPassword } from "@/lib/pb/gallery";
 import { notifyDeliveryPublished } from "@/lib/notifications";
 
 export interface ActionState {
@@ -9,16 +11,14 @@ export interface ActionState {
   ok?: boolean;
 }
 
+const SESSION_EXPIRED = { error: "Sessão expirada." } as const;
+
 export async function updateGalleryAction(
   galleryId: string,
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: "Sessão expirada." };
+  if (!(await getAdminUser())) return SESSION_EXPIRED;
 
   const title = String(formData.get("title") ?? "").trim();
   const status = String(formData.get("status") ?? "draft");
@@ -44,23 +44,24 @@ export async function updateGalleryAction(
 
   if (!title) return { error: "O título é obrigatório." };
 
-  const { error } = await supabase
-    .from("galleries")
-    .update({
+  try {
+    const pb = await superuserPb();
+    await pb.collection("galleries").update(galleryId, {
       title,
       status,
+      // PocketBase limpa campo de data com string vazia, não com null.
       access_expires_at: accessExpiresAt
         ? new Date(`${accessExpiresAt}T23:59:59`).toISOString()
-        : null,
+        : "",
       download_expires_days: Number.isFinite(downloadDays) ? downloadDays : 30,
       selection_mode: selectionMode,
       selection_limit: selectionLimit,
       extra_photo_cents: extraPhotoCents,
       delivery_mode: deliveryMode,
-    })
-    .eq("id", galleryId);
-
-  if (error) return { error: error.message };
+    });
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "Erro ao salvar." };
+  }
 
   revalidatePath(`/admin/ensaios/${galleryId}`);
   revalidatePath("/admin");
@@ -72,34 +73,31 @@ export async function setPasswordAction(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const supabase = await createClient();
+  // O original não checava sessão aqui — qualquer um podia trocar a senha
+  // de um ensaio sabendo o id.
+  if (!(await getAdminUser())) return SESSION_EXPIRED;
+
   const password = String(formData.get("password") ?? "").trim();
   if (password.length < 4) {
     return { error: "A senha deve ter ao menos 4 caracteres." };
   }
-  const { error } = await supabase.rpc("set_gallery_password", {
-    p_gallery_id: galleryId,
-    p_password: password,
-  });
-  if (error) return { error: error.message };
-  return { ok: true };
+  return setGalleryPassword(galleryId, password);
 }
 
 export async function setDeliveryPublishedAction(
   galleryId: string,
   published: boolean,
 ): Promise<ActionState> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: "Sessão expirada." };
+  if (!(await getAdminUser())) return SESSION_EXPIRED;
 
-  const { error } = await supabase
-    .from("galleries")
-    .update({ delivered_at: published ? new Date().toISOString() : null })
-    .eq("id", galleryId);
-  if (error) return { error: error.message };
+  try {
+    const pb = await superuserPb();
+    await pb.collection("galleries").update(galleryId, {
+      delivered_at: published ? new Date().toISOString() : "",
+    });
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "Erro ao publicar." };
+  }
 
   revalidatePath(`/admin/ensaios/${galleryId}`);
   if (published) await notifyDeliveryPublished(galleryId);
@@ -119,31 +117,34 @@ export async function savePlansAction(
   galleryId: string,
   plans: PlanInput[],
 ): Promise<ActionState> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: "Sessão expirada." };
+  if (!(await getAdminUser())) return SESSION_EXPIRED;
 
-  // Substitui o conjunto de planos da galeria (RLS garante a propriedade).
-  const { error: delError } = await supabase
-    .from("pricing_plans")
-    .delete()
-    .eq("gallery_id", galleryId);
-  if (delError) return { error: delError.message };
+  try {
+    const pb = await superuserPb();
 
-  if (plans.length > 0) {
-    const rows = plans.map((p) => ({
-      gallery_id: galleryId,
-      media_type: p.mediaType,
-      kind: p.kind,
-      name: p.name,
-      included_qty: p.includedQty,
-      price_cents: p.priceCents,
-      extra_item_cents: p.extraItemCents,
-    }));
-    const { error } = await supabase.from("pricing_plans").insert(rows);
-    if (error) return { error: error.message };
+    // Substitui o conjunto inteiro de planos da galeria. `contracted_plan` nas
+    // seleções não tem cascade, então uma seleção existente só perde a
+    // referência ao pacote — as fotos escolhidas ficam intactas.
+    const current = await pb.collection("pricing_plans").getFullList<{ id: string }>({
+      filter: pb.filter("gallery = {:g}", { g: galleryId }),
+    });
+    await Promise.all(
+      current.map((p) => pb.collection("pricing_plans").delete(p.id)),
+    );
+
+    for (const p of plans) {
+      await pb.collection("pricing_plans").create({
+        gallery: galleryId,
+        media_type: p.mediaType,
+        kind: p.kind,
+        name: p.name,
+        included_qty: p.includedQty,
+        price_cents: p.priceCents,
+        extra_item_cents: p.extraItemCents,
+      });
+    }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "Erro ao salvar preços." };
   }
 
   revalidatePath(`/admin/ensaios/${galleryId}`);

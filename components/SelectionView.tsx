@@ -9,8 +9,9 @@ import {
   Loader2,
   Pencil,
   Download,
+  Package,
 } from "lucide-react";
-import { useSelectedIds } from "@/store/selection";
+import { useSelectedIds, useContractedPlan } from "@/store/selection";
 import { useHydrated } from "@/lib/useHydrated";
 import { videoCost } from "@/lib/pricing";
 import { formatBRL } from "@/lib/format";
@@ -21,6 +22,7 @@ import type { PublicGallery } from "@/lib/types";
 export function SelectionView({ gallery }: { gallery: PublicGallery }) {
   const token = gallery.token;
   const selectedIds = useSelectedIds(token);
+  const contractedPlan = useContractedPlan(token);
   const hydrated = useHydrated();
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -40,9 +42,13 @@ export function SelectionView({ gallery }: { gallery: PublicGallery }) {
     );
   }
 
-  const selectedPhotos = gallery.media.filter(
-    (m) => m.type === "photo" && selectedIds[m.id],
-  );
+  const isFull =
+    contractedPlan?.kind === "full" && contractedPlan.mediaType === "photo";
+
+  const allPhotos = gallery.media.filter((m) => m.type === "photo");
+  const selectedPhotos = isFull
+    ? allPhotos
+    : gallery.media.filter((m) => m.type === "photo" && selectedIds[m.id]);
   const selectedVideos = gallery.media.filter(
     (m) => m.type === "video" && selectedIds[m.id],
   );
@@ -50,20 +56,34 @@ export function SelectionView({ gallery }: { gallery: PublicGallery }) {
 
   const isDirect = gallery.deliveryMode === "direct";
   const isQuota = gallery.selectionMode === "quota";
-  const limit = gallery.selectionLimit ?? 0;
-  const extras = isQuota ? Math.max(0, count - limit) : 0;
+  const baseLimit = gallery.selectionLimit ?? 0;
+  const effectiveLimit: number | null = (() => {
+    if (!contractedPlan || contractedPlan.mediaType !== "photo") return baseLimit;
+    if (contractedPlan.kind === "full") return null; // sem limite
+    if (contractedPlan.kind === "package") return baseLimit + (contractedPlan.includedQty ?? 0);
+    return baseLimit; // single: sem alteração
+  })();
+
+  const extras =
+    isQuota && !isFull && effectiveLimit !== null
+      ? Math.max(0, count - effectiveLimit)
+      : 0;
   const extraPrice = gallery.extraPhotoCents ?? 0;
   const extrasTotal = extras * extraPrice;
 
   const videoPlan = gallery.plans.find((p) => p.mediaType === "video");
   const videosTotal = videoCost(videoPlan, selectedVideos.length);
-  const total = extrasTotal + videosTotal;
+  const contractedTotal = isFull ? (contractedPlan?.priceCents ?? 0) : 0;
+  const total = extrasTotal + videosTotal + contractedTotal;
 
   const empty = count === 0 && selectedVideos.length === 0;
 
   async function confirm() {
     setSubmitting(true);
-    const res = await submitSelectionAction(token, Object.keys(selectedIds));
+    const mediaIds = isFull
+      ? allPhotos.map((m) => m.id)
+      : Object.keys(selectedIds);
+    const res = await submitSelectionAction(token, mediaIds);
     setSubmitting(false);
     if (!res.error) setSent(true);
   }
@@ -138,11 +158,20 @@ export function SelectionView({ gallery }: { gallery: PublicGallery }) {
         <>
           {/* Resumo conforme o modo do ensaio */}
           <div className="mt-4 rounded-md border border-border bg-card p-4">
-            {isQuota ? (
+            {isFull ? (
+              <>
+                <p className="text-sm text-primary">
+                  <span className="font-medium">{count}</span> foto(s) escolhida(s) · pacote completo
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Todas as fotos inclusas · {formatBRL(contractedTotal)}
+                </p>
+              </>
+            ) : isQuota ? (
               <>
                 <p className="text-sm text-primary">
                   <span className="font-medium">{count}</span> de{" "}
-                  <span className="font-medium">{limit}</span> fotos inclusas
+                  <span className="font-medium">{effectiveLimit}</span> fotos inclusas
                 </p>
                 {extras > 0 ? (
                   <p className="mt-1 text-sm text-muted-foreground">
@@ -164,6 +193,18 @@ export function SelectionView({ gallery }: { gallery: PublicGallery }) {
               </p>
             )}
           </div>
+
+          {/* Pacote contratado */}
+          {contractedPlan && (
+            <div className="mt-2 flex items-center gap-2 rounded-md border border-accent/40 bg-accent/10 px-3 py-2 text-sm text-accent">
+              <Package className="h-4 w-4 shrink-0" />
+              <span>
+                Pacote <strong>{contractedPlan.name}</strong> adicionado
+                {contractedPlan.includedQty != null &&
+                  ` (+${contractedPlan.includedQty} fotos inclusas)`}
+              </span>
+            </div>
+          )}
 
           {/* Miniaturas */}
           {count > 0 && (
@@ -206,7 +247,9 @@ export function SelectionView({ gallery }: { gallery: PublicGallery }) {
           {/* Total (só quando há valor a pagar) */}
           {total > 0 && (
             <div className="mt-4 flex items-baseline justify-between border-t border-border pt-4">
-              <span className="label-caps">Extras a combinar</span>
+              <span className="label-caps">
+                {isFull ? "Valor do pacote" : "Extras a combinar"}
+              </span>
               <span className="font-display text-2xl text-accent">
                 {formatBRL(total)}
               </span>
@@ -238,6 +281,7 @@ export function SelectionView({ gallery }: { gallery: PublicGallery }) {
           onClose={() => setLightboxIndex(null)}
         />
       )}
+
     </div>
   );
 }

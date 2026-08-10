@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { getAdminUser } from "@/lib/pb/session";
+import { superuserPb } from "@/lib/pb/superuser";
 import { r2Upload, BUCKET_PRIVATE } from "@/lib/r2";
 
 export const runtime = "nodejs";
@@ -10,20 +11,16 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id: galleryId } = await params;
-  const supabase = await createClient();
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  if (!(await getAdminUser())) {
     return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
   }
 
-  const { data: gallery } = await supabase
-    .from("galleries")
-    .select("id")
-    .eq("id", galleryId)
-    .single();
+  const pb = await superuserPb();
+  const gallery = await pb
+    .collection("galleries")
+    .getOne(galleryId)
+    .catch(() => null);
   if (!gallery) {
     return NextResponse.json({ error: "Galeria não encontrada" }, { status: 404 });
   }
@@ -39,16 +36,24 @@ export async function POST(
     const buf = Buffer.from(await file.arrayBuffer());
     const key = `${galleryId}/${crypto.randomUUID()}`;
 
-    await r2Upload(BUCKET_PRIVATE, key, buf, file.type || "application/octet-stream");
+    await r2Upload(
+      BUCKET_PRIVATE,
+      key,
+      buf,
+      file.type || "application/octet-stream",
+    );
 
-    const { error } = await supabase.from("final_assets").insert({
-      gallery_id: galleryId,
-      storage_key: key,
-      filename: file.name,
-      size_bytes: buf.length,
-    });
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    try {
+      await pb.collection("final_assets").create({
+        gallery: galleryId,
+        storage_key: key,
+        filename: file.name,
+      });
+    } catch (err) {
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : "Erro ao registrar" },
+        { status: 500 },
+      );
     }
     done++;
   }

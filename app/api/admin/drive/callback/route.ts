@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { cookies } from "next/headers";
-import { createClient } from "@/lib/supabase/server";
+import { getAdminUser } from "@/lib/pb/session";
+import { superuserPb } from "@/lib/pb/superuser";
 import { exchangeCode } from "@/lib/google";
 import { encrypt } from "@/lib/crypto";
 
@@ -23,37 +24,39 @@ export async function GET(req: NextRequest) {
     return back(req, "error");
   }
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.redirect(new URL("/admin/login", req.url));
+  if (!(await getAdminUser())) {
+    return NextResponse.redirect(new URL("/admin/login", req.url));
+  }
 
   try {
     const tokens = await exchangeCode(code);
-    if (!tokens.refresh_token) {
-      return back(req, "norefresh");
-    }
+    if (!tokens.refresh_token) return back(req, "norefresh");
 
     // Busca o e-mail da conta conectada (informativo).
     let email: string | null = null;
     try {
-      const info = await fetch(
-        "https://www.googleapis.com/oauth2/v2/userinfo",
-        { headers: { Authorization: `Bearer ${tokens.access_token}` } },
-      );
+      const info = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+        headers: { Authorization: `Bearer ${tokens.access_token}` },
+      });
       if (info.ok) email = ((await info.json()) as { email?: string }).email ?? null;
     } catch {
       // opcional — ignora
     }
 
-    await supabase.from("drive_connections").delete().eq("user_id", user.id);
-    const { error } = await supabase.from("drive_connections").insert({
-      user_id: user.id,
-      google_account_email: email,
+    const pb = await superuserPb();
+
+    // Uma fotógrafa só: a conexão nova substitui a anterior.
+    const current = await pb
+      .collection("drive_connections")
+      .getFullList<{ id: string }>();
+    await Promise.all(
+      current.map((c) => pb.collection("drive_connections").delete(c.id)),
+    );
+
+    await pb.collection("drive_connections").create({
+      google_account_email: email ?? "",
       refresh_token_encrypted: encrypt(tokens.refresh_token),
     });
-    if (error) return back(req, "error");
 
     jar.delete("drive_oauth_state");
     return back(req, "connected");

@@ -1,17 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { cookies } from "next/headers";
 import crypto from "node:crypto";
-import { createClient } from "@/lib/supabase/server";
+import { getAdminUser } from "@/lib/pb/session";
 import { buildAuthUrl } from "@/lib/google";
 
 export const runtime = "nodejs";
 
 export async function GET(req: NextRequest) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.redirect(new URL("/admin/login", req.url));
+  if (!(await getAdminUser())) {
+    return NextResponse.redirect(new URL("/admin/login", req.url));
+  }
 
   const state = crypto.randomBytes(16).toString("hex");
   const jar = await cookies();

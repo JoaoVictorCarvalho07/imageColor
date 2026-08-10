@@ -2,7 +2,7 @@ import { type NextRequest } from "next/server";
 import { Readable } from "node:stream";
 import { ZipArchive } from "archiver";
 import { cookies } from "next/headers";
-import { createClient } from "@/lib/supabase/server";
+import { getSessionGallery } from "@/lib/pb/gallery";
 import { r2Download, BUCKET_PRIVATE } from "@/lib/r2";
 import { sessionCookieName } from "@/lib/access";
 
@@ -10,7 +10,7 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 export async function GET(
-  req: NextRequest,
+  _req: NextRequest,
   { params }: { params: Promise<{ token: string }> },
 ) {
   const { token } = await params;
@@ -19,18 +19,12 @@ export async function GET(
   const session = jar.get(sessionCookieName(token))?.value;
   if (!session) return new Response("Sessão inválida", { status: 401 });
 
-  const supabase = await createClient();
-  const { data } = await supabase.rpc("get_gallery_session", {
-    p_session: session,
-  });
-  if (!data || !data.download_ready) {
+  const gallery = await getSessionGallery(session);
+  if (!gallery?.downloadReady) {
     return new Response("Entrega indisponível", { status: 403 });
   }
-  const finals = (data.finals ?? []) as {
-    storage_key: string;
-    filename: string | null;
-    bucket: "finals" | "originals";
-  }[];
+
+  const finals = gallery.finals ?? [];
   if (finals.length === 0) return new Response("Sem arquivos", { status: 404 });
 
   const archive = new ZipArchive();
@@ -43,7 +37,7 @@ export async function GET(
         i++;
         let buf: Buffer;
         try {
-          buf = await r2Download(BUCKET_PRIVATE, f.storage_key);
+          buf = await r2Download(BUCKET_PRIVATE, f.storageKey);
         } catch {
           continue;
         }

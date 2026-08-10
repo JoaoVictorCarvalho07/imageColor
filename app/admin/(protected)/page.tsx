@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Plus, Images, Clock, FolderOpen, ExternalLink } from "lucide-react";
-import { createClient } from "@/lib/supabase/server";
+import { superuserPb } from "@/lib/pb/superuser";
 import { formatDateBR } from "@/lib/format";
 import { DeleteGalleryButton } from "@/components/admin/DeleteGalleryButton";
 
@@ -9,9 +9,8 @@ type GalleryRow = {
   title: string;
   status: "draft" | "processing" | "ready" | "closed";
   access_token: string;
-  access_expires_at: string | null;
-  created_at: string;
-  media_items: { count: number }[] | null;
+  access_expires_at: string;
+  created: string;
 };
 
 const STATUS: Record<
@@ -25,17 +24,24 @@ const STATUS: Record<
 };
 
 export default async function DashboardPage() {
-  const supabase = await createClient();
-  const { data } = await supabase
-    .from("galleries")
-    .select(
-      "id,title,status,access_token,access_expires_at,created_at, media_items(count)",
-    )
-    .order("created_at", { ascending: false });
+  const pb = await superuserPb();
 
-  const galleries = (data ?? []) as GalleryRow[];
-  const mediaCount = (g: GalleryRow) => g.media_items?.[0]?.count ?? 0;
-  const totalMedia = galleries.reduce((sum, g) => sum + mediaCount(g), 0);
+  // Duas consultas em vez de um join com agregação: as mídias vêm só com o id
+  // da galeria (`fields`), e a contagem é feita aqui.
+  const [galleries, mediaRefs] = await Promise.all([
+    pb.collection("galleries").getFullList<GalleryRow>({ sort: "-created" }),
+    pb
+      .collection("media_items")
+      .getFullList<{ gallery: string }>({ fields: "gallery" }),
+  ]);
+
+  const countByGallery = new Map<string, number>();
+  for (const m of mediaRefs) {
+    countByGallery.set(m.gallery, (countByGallery.get(m.gallery) ?? 0) + 1);
+  }
+
+  const mediaCount = (g: GalleryRow) => countByGallery.get(g.id) ?? 0;
+  const totalMedia = mediaRefs.length;
   const processing = galleries.filter((g) => g.status === "processing").length;
 
   return (
@@ -73,7 +79,7 @@ export default async function DashboardPage() {
         ) : (
           <ul className="divide-y divide-border">
             {galleries.map((g) => {
-              const s = STATUS[g.status];
+              const s = STATUS[g.status] ?? STATUS.draft;
               return (
                 <li
                   key={g.id}

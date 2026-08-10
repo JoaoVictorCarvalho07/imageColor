@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { getAdminUser } from "@/lib/pb/session";
+import { superuserPb } from "@/lib/pb/superuser";
 import { decrypt } from "@/lib/crypto";
 import {
   refreshAccessToken,
@@ -8,6 +9,7 @@ import {
   downloadFile,
 } from "@/lib/google";
 import { storePhoto } from "@/lib/mediaPipeline";
+import { WATERMARK_TEXT } from "@/lib/studio";
 import { previewUrl } from "@/lib/storageUrl";
 
 export const runtime = "nodejs";
@@ -18,12 +20,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id: galleryId } = await params;
-  const supabase = await createClient();
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  if (!(await getAdminUser())) {
     return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
   }
 
@@ -36,33 +34,26 @@ export async function POST(
     );
   }
 
-  const { data: gallery } = await supabase
-    .from("galleries")
-    .select("id")
-    .eq("id", galleryId)
-    .single();
+  const pb = await superuserPb();
+
+  const gallery = await pb
+    .collection("galleries")
+    .getOne(galleryId)
+    .catch(() => null);
   if (!gallery) {
     return NextResponse.json({ error: "Galeria não encontrada" }, { status: 404 });
   }
 
-  const { data: conn } = await supabase
-    .from("drive_connections")
-    .select("refresh_token_encrypted")
-    .limit(1)
-    .maybeSingle();
+  const conns = await pb
+    .collection("drive_connections")
+    .getFullList<{ refresh_token_encrypted: string }>();
+  const conn = conns[0];
   if (!conn) {
     return NextResponse.json(
       { error: "Conecte o Google Drive primeiro." },
       { status: 400 },
     );
   }
-
-  const { data: photographer } = await supabase
-    .from("photographers")
-    .select("watermark_text")
-    .eq("id", user.id)
-    .single();
-  const wmText = photographer?.watermark_text || "ISABEL PONTES";
 
   let accessToken: string;
   try {
@@ -85,19 +76,19 @@ export async function POST(
   }
 
   // Evita reimportar o que já veio (por drive_file_id).
-  const { data: existing } = await supabase
-    .from("media_items")
-    .select("drive_file_id")
-    .eq("gallery_id", galleryId)
-    .not("drive_file_id", "is", null);
-  const seen = new Set((existing ?? []).map((r) => r.drive_file_id));
+  const existing = await pb.collection("media_items").getFullList<{
+    drive_file_id: string;
+  }>({
+    filter: pb.filter("gallery = {:g} && drive_file_id != ''", { g: galleryId }),
+    fields: "drive_file_id",
+  });
+  const seen = new Set(existing.map((r) => r.drive_file_id));
   const toImport = files.filter((f) => !seen.has(f.id));
 
-  const { count } = await supabase
-    .from("media_items")
-    .select("id", { count: "exact", head: true })
-    .eq("gallery_id", galleryId);
-  let position = count ?? 0;
+  const all = await pb.collection("media_items").getList(1, 1, {
+    filter: pb.filter("gallery = {:g}", { g: galleryId }),
+  });
+  let position = all.totalItems;
 
   const skipped = files.length - toImport.length;
   const encoder = new TextEncoder();
@@ -113,12 +104,12 @@ export async function POST(
       try {
         for (const f of toImport) {
           const buf = await downloadFile(accessToken, f.id);
-          const { thumbKey } = await storePhoto(supabase, {
+          const { thumbKey } = await storePhoto({
             galleryId,
             buffer: buf,
             contentType: f.mimeType,
             position: position++,
-            watermarkText: wmText,
+            watermarkText: WATERMARK_TEXT,
             driveFileId: f.id,
             filename: f.name,
           });
@@ -132,10 +123,9 @@ export async function POST(
           });
         }
 
-        await supabase
-          .from("galleries")
-          .update({ drive_folder_id: folderId })
-          .eq("id", galleryId);
+        await pb
+          .collection("galleries")
+          .update(galleryId, { drive_folder_id: folderId });
 
         send({ type: "done", imported, skipped, found: files.length });
       } catch (e) {

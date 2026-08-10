@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { getAdminUser } from "@/lib/pb/session";
+import { createGallery } from "@/lib/pb/gallery";
 
 export interface CreateGalleryState {
   error?: string;
@@ -12,14 +13,13 @@ export async function createGalleryAction(
   _prev: CreateGalleryState,
   formData: FormData,
 ): Promise<CreateGalleryState> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: "Sessão expirada. Entre novamente." };
+  if (!(await getAdminUser())) {
+    return { error: "Sessão expirada. Entre novamente." };
+  }
 
   const title = String(formData.get("title") ?? "").trim();
   const clientName = String(formData.get("clientName") ?? "").trim();
+  const clientEmail = String(formData.get("clientEmail") ?? "").trim();
   const password = String(formData.get("password") ?? "").trim();
   const accessDays = Number(formData.get("accessDays") ?? 15);
 
@@ -28,14 +28,15 @@ export async function createGalleryAction(
     return { error: "A senha deve ter ao menos 4 caracteres." };
   }
 
-  const { error } = await supabase.rpc("create_gallery", {
-    p_title: title,
-    p_client_name: clientName || null,
-    p_password: password || "",
-    p_access_days: Number.isFinite(accessDays) ? accessDays : 15,
+  const res = await createGallery({
+    title,
+    clientName,
+    clientEmail,
+    password,
+    accessDays: Number.isFinite(accessDays) ? accessDays : 15,
   });
 
-  if (error) return { error: error.message };
+  if (res.error) return { error: res.error };
 
   revalidatePath("/admin");
   redirect("/admin");

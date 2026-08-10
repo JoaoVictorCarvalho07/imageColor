@@ -37,7 +37,7 @@ export function MediaUploader({ galleryId }: { galleryId: string }) {
             new URLSearchParams({ filename: file.name, type: file.type }),
         );
         if (!presignRes.ok) throw new Error("Falha ao iniciar upload");
-        const { uploadUrl, originalKey, mediaId } = await presignRes.json();
+        const { uploadUrl, originalKey, objectId } = await presignRes.json();
 
         // 2. PUT direto ao R2 — contorna o limite de 4.5 MB do Vercel
         const putRes = await fetch(uploadUrl, {
@@ -52,7 +52,7 @@ export function MediaUploader({ galleryId }: { galleryId: string }) {
         const processRes = await fetch(`/api/admin/ensaios/${galleryId}/upload`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ originalKey, mediaId, filename: file.name, contentType: file.type }),
+          body: JSON.stringify({ originalKey, objectId, filename: file.name, contentType: file.type }),
         });
         if (!processRes.ok) {
           const json = await processRes.json().catch(() => ({}));

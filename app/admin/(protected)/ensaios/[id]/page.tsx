@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ChevronLeft, Image as ImageIcon, Film, Users } from "lucide-react";
-import { createClient } from "@/lib/supabase/server";
+import { superuserPb } from "@/lib/pb/superuser";
 import { formatDateBR } from "@/lib/format";
 import { CopyLink } from "@/components/admin/CopyLink";
 import { SetPasswordForm } from "@/components/admin/SetPasswordForm";
@@ -44,77 +44,90 @@ export default async function EnsaioDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const supabase = await createClient();
+  const pb = await superuserPb();
 
-  const { data: gallery } = await supabase
-    .from("galleries")
-    .select("*")
-    .eq("id", id)
-    .single();
-  if (!gallery) notFound();
-
-  const [
-    { data: plans },
-    { data: media },
-    { data: selections },
-    { data: driveConn },
-    { data: finals },
-  ] = await Promise.all([
-    supabase
-      .from("pricing_plans")
-      .select("*")
-      .eq("gallery_id", id)
-      .order("created_at", { ascending: true }),
-    supabase
-      .from("media_items")
-      .select("id, type, thumb_key, status, position")
-      .eq("gallery_id", id)
-      .order("position", { ascending: true }),
-    supabase
-      .from("selections")
-      .select(
-        "id, status, created_at, submitted_at, selection_items(media_items(filename, type))",
-      )
-      .eq("gallery_id", id)
-      .order("created_at", { ascending: false }),
-    supabase
-      .from("drive_connections")
-      .select("google_account_email")
-      .limit(1)
-      .maybeSingle(),
-    supabase
-      .from("final_assets")
-      .select("filename")
-      .eq("gallery_id", id)
-      .order("created_at", { ascending: true }),
-  ]);
-
-  const finalRows = (finals ?? []) as { filename: string | null }[];
-
+  type GalleryRecord = {
+    id: string;
+    title: string;
+    status: string;
+    access_token: string;
+    access_expires_at: string;
+    download_expires_days: number;
+    selection_mode: "free" | "quota";
+    selection_limit: number | null;
+    extra_photo_cents: number | null;
+    delivery_mode: "edit" | "direct";
+    delivered_at: string;
+    drive_folder_id: string;
+  };
   type MediaRow = {
     id: string;
     type: "photo" | "video";
-    thumb_key: string | null;
+    thumb_key: string;
     status: string;
     position: number;
   };
-  const mediaRows = (media ?? []).map((m: MediaRow) => ({
+  type PlanRecord = {
+    media_type: "photo" | "video";
+    kind: "single" | "package" | "full";
+    name: string;
+    included_qty: number | null;
+    price_cents: number;
+    extra_item_cents: number | null;
+  };
+  type SelectionRow = {
+    id: string;
+    status: string;
+    created: string;
+    submitted_at: string;
+    expand?: { media?: { filename: string; type: string }[] };
+  };
+
+  const gallery = await pb
+    .collection("galleries")
+    .getOne<GalleryRecord>(id)
+    .catch(() => null);
+  if (!gallery) notFound();
+
+  const byGallery = pb.filter("gallery = {:g}", { g: id });
+
+  const [plans, media, selections, driveConns, finals] = await Promise.all([
+    pb.collection("pricing_plans").getFullList<PlanRecord>({
+      filter: byGallery,
+      sort: "created",
+    }),
+    pb.collection("media_items").getFullList<MediaRow>({
+      filter: byGallery,
+      sort: "position",
+      fields: "id,type,thumb_key,status,position",
+    }),
+    // `expand: media` traz os itens escolhidos — o que antes era o join com
+    // selection_items.
+    pb.collection("selections").getFullList<SelectionRow>({
+      filter: byGallery,
+      sort: "-created",
+      expand: "media",
+    }),
+    pb
+      .collection("drive_connections")
+      .getFullList<{ google_account_email: string }>(),
+    pb.collection("final_assets").getFullList<{ filename: string }>({
+      filter: byGallery,
+      sort: "created",
+    }),
+  ]);
+
+  const driveConn = driveConns[0] ?? null;
+  const finalRows = finals as { filename: string | null }[];
+
+  const mediaRows = media.map((m) => ({
     ...m,
     thumbUrl: previewUrl(m.thumb_key),
   }));
   const photos = mediaRows.filter((m) => m.type === "photo").length;
   const videos = mediaRows.filter((m) => m.type === "video").length;
 
-  type SelectionRow = {
-    id: string;
-    status: string;
-    created_at: string;
-    submitted_at: string | null;
-    selection_items:
-      | { media_items: { filename: string | null; type: string } | null }[]
-      | null;
-  };
-  const selectionRows = (selections ?? []) as unknown as SelectionRow[];
+  const selectionRows = selections;
 
   const planRows: PlanRow[] = (plans ?? []).map((p) => ({
     mediaType: p.media_type,
@@ -240,18 +253,15 @@ export default async function EnsaioDetailPage({
         ) : (
           <ul className="space-y-4">
             {selectionRows.map((sel) => {
-              const items = sel.selection_items ?? [];
-              const names = items
-                .map((it) => it.media_items)
-                .filter((m): m is { filename: string | null; type: string } => !!m)
-                .map((m) => m.filename ?? "(sem nome)");
+              const items = sel.expand?.media ?? [];
+              const names = items.map((m) => m.filename || "(sem nome)");
               const statusLabel =
                 sel.status === "submitted"
                   ? "Enviada"
                   : sel.status === "paid"
                     ? "Paga"
                     : "Em andamento";
-              const when = sel.submitted_at ?? sel.created_at;
+              const when = sel.submitted_at || sel.created;
               return (
                 <li
                   key={sel.id}

@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { storePhotoFromR2Key } from "@/lib/mediaPipeline";
+import { getAdminUser } from "@/lib/pb/session";
+import { superuserPb } from "@/lib/pb/superuser";
+import { storePhotoFromR2Key, keysFor } from "@/lib/mediaPipeline";
+import { WATERMARK_TEXT } from "@/lib/studio";
 import { processVideo } from "@/lib/video";
 import { r2Download, r2Upload, BUCKET_PUBLIC, BUCKET_PRIVATE } from "@/lib/r2";
 
@@ -10,7 +12,7 @@ export const maxDuration = 300;
 /**
  * POST /api/admin/ensaios/[id]/upload
  *
- * Recebe { originalKey, mediaId, filename, contentType } em JSON.
+ * Recebe { originalKey, objectId, filename, contentType } em JSON.
  * O original já está no R2 privado (enviado pelo browser via presigned PUT).
  * Este endpoint só faz: download do original → watermark/thumb → upload → DB.
  */
@@ -19,50 +21,46 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id: galleryId } = await params;
-  const supabase = await createClient();
 
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  if (!(await getAdminUser())) {
+    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  }
 
-  const { data: gallery } = await supabase
-    .from("galleries").select("id").eq("id", galleryId).single();
-  if (!gallery) return NextResponse.json({ error: "Galeria não encontrada" }, { status: 404 });
+  const pb = await superuserPb();
+  const gallery = await pb
+    .collection("galleries")
+    .getOne(galleryId)
+    .catch(() => null);
+  if (!gallery) {
+    return NextResponse.json({ error: "Galeria não encontrada" }, { status: 404 });
+  }
 
-  const { data: photographer } = await supabase
-    .from("photographers").select("watermark_text").eq("id", user.id).single();
-  const wmText = photographer?.watermark_text || "ISABEL PONTES";
-
-  const body = await req.json() as {
+  const { originalKey, objectId, filename, contentType } = (await req.json()) as {
     originalKey: string;
-    mediaId: string;
+    objectId: string;
     filename: string;
     contentType: string;
   };
-  const { originalKey, mediaId, filename, contentType } = body;
 
-  const { count } = await supabase
-    .from("media_items")
-    .select("id", { count: "exact", head: true })
-    .eq("gallery_id", galleryId);
-  const position = count ?? 0;
+  const existing = await pb.collection("media_items").getList(1, 1, {
+    filter: pb.filter("gallery = {:g}", { g: galleryId }),
+  });
+  const position = existing.totalItems;
 
-  const isVideo = contentType.startsWith("video/");
-
-  if (isVideo) {
+  if (contentType.startsWith("video/")) {
     try {
       const buf = await r2Download(BUCKET_PRIVATE, originalKey);
-      const { preview, thumb } = await processVideo(buf, wmText);
-      const previewKey = `${galleryId}/${mediaId}.mp4`;
-      const thumbKey = `${galleryId}/${mediaId}_t.webp`;
+      const { preview, thumb } = await processVideo(buf, WATERMARK_TEXT);
+      const { thumbKey } = keysFor(galleryId, objectId);
+      const previewKey = `${galleryId}/${objectId}.mp4`;
 
       await Promise.all([
         r2Upload(BUCKET_PUBLIC, previewKey, preview, "video/mp4"),
         r2Upload(BUCKET_PUBLIC, thumbKey, thumb, "image/webp"),
       ]);
 
-      const { error } = await supabase.from("media_items").insert({
-        id: mediaId,
-        gallery_id: galleryId,
+      await pb.collection("media_items").create({
+        gallery: galleryId,
         type: "video",
         preview_key: previewKey,
         thumb_key: thumbKey,
@@ -71,7 +69,6 @@ export async function POST(
         status: "ready",
         position,
       });
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     } catch (e) {
       return NextResponse.json(
         { error: e instanceof Error ? e.message : "Falha ao processar o vídeo." },
@@ -80,13 +77,12 @@ export async function POST(
     }
   } else {
     try {
-      await storePhotoFromR2Key(supabase, {
+      await storePhotoFromR2Key({
         galleryId,
-        mediaId,
+        objectId,
         originalKey,
-        contentType,
         position,
-        watermarkText: wmText,
+        watermarkText: WATERMARK_TEXT,
         filename,
       });
     } catch (e) {

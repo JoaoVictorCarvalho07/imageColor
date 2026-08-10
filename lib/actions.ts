@@ -2,7 +2,7 @@
 
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { openGallerySession } from "@/lib/pb/gallery";
 import { sessionCookieName } from "./access";
 
 export interface LoginState {
@@ -16,17 +16,11 @@ export async function login(
   const token = String(formData.get("token") ?? "");
   const password = String(formData.get("password") ?? "");
 
-  const supabase = await createClient();
-  const { data: session, error } = await supabase.rpc("open_gallery_session", {
-    p_token: token,
-    p_password: password,
-  });
-
-  if (error) return { error: "Não foi possível validar. Tente novamente." };
+  const session = await openGallerySession(token, password);
   if (!session) return { error: "Senha incorreta ou acesso expirado." };
 
   const jar = await cookies();
-  jar.set(sessionCookieName(token), session as string, {
+  jar.set(sessionCookieName(token), session, {
     httpOnly: true,
     sameSite: "lax",
     path: `/g/${token}`,

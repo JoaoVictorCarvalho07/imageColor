@@ -1,7 +1,7 @@
-import { redirect } from "next/navigation";
 import Link from "next/link";
 import { Camera, LayoutDashboard, Plus } from "lucide-react";
-import { createClient } from "@/lib/supabase/server";
+import { requireAdmin } from "@/lib/pb/session";
+import { STUDIO_NAME } from "@/lib/studio";
 import { LogoutButton } from "@/components/admin/LogoutButton";
 
 export default async function AdminLayout({
@@ -9,17 +9,9 @@ export default async function AdminLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/admin/login");
-
-  const { data: photographer } = await supabase
-    .from("photographers")
-    .select("studio_name")
-    .eq("id", user.id)
-    .single();
+  // Verificação real da sessão (assinatura + allowlist). O middleware só faz
+  // a checagem otimista; é aqui que o acesso é de fato autorizado.
+  await requireAdmin();
 
   return (
     <div className="min-h-screen">
@@ -28,7 +20,7 @@ export default async function AdminLayout({
           <Link href="/admin" className="flex min-w-0 items-center gap-2">
             <Camera className="h-5 w-5 shrink-0 text-accent" />
             <span className="truncate font-display text-lg text-primary">
-              {photographer?.studio_name ?? "Painel"}
+              {STUDIO_NAME}
             </span>
           </Link>
           <nav className="flex items-center gap-1 sm:gap-3">

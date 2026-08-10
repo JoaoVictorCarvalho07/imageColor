@@ -1,6 +1,19 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { superuserPb } from "./pb/superuser";
 import { processImage } from "./watermark";
 import { r2Upload, r2Download, BUCKET_PUBLIC, BUCKET_PRIVATE } from "./r2";
+
+/**
+ * O id do REGISTRO (gerado pelo PocketBase, 15 chars) e o id do OBJETO no R2
+ * são coisas separadas. As chaves do R2 são escolhidas aqui e guardadas no
+ * registro — nada depende de os dois coincidirem.
+ */
+export const newObjectId = (): string => crypto.randomUUID();
+
+export const keysFor = (galleryId: string, objectId: string) => ({
+  previewKey: `${galleryId}/${objectId}.webp`,
+  thumbKey: `${galleryId}/${objectId}_t.webp`,
+  originalKey: `${galleryId}/${objectId}_orig`,
+});
 
 export interface StorePhotoOpts {
   galleryId: string;
@@ -18,12 +31,11 @@ export interface StoredPhoto {
   thumbKey: string;
 }
 
-/** Aplica marca d'água, sobe preview/thumb (públicos) + original (privado) e
- * insere a linha em media_items. Lança erro em falha. */
-export async function storePhoto(
-  supabase: SupabaseClient,
-  opts: StorePhotoOpts,
-): Promise<StoredPhoto> {
+/**
+ * Aplica marca d'água, sobe preview/thumb (públicos) + original (privado) e
+ * insere o registro em `media_items`. Lança erro em falha.
+ */
+export async function storePhoto(opts: StorePhotoOpts): Promise<StoredPhoto> {
   const {
     galleryId,
     buffer,
@@ -38,72 +50,25 @@ export async function storePhoto(
     text: watermarkText,
   });
 
-  const mediaId = crypto.randomUUID();
-  const previewKey = `${galleryId}/${mediaId}.webp`;
-  const thumbKey = `${galleryId}/${mediaId}_t.webp`;
-  const origKey = `${galleryId}/${mediaId}_orig`;
+  const { previewKey, thumbKey, originalKey } = keysFor(galleryId, newObjectId());
 
   await Promise.all([
     r2Upload(BUCKET_PUBLIC, previewKey, preview, "image/webp"),
     r2Upload(BUCKET_PUBLIC, thumbKey, thumb, "image/webp"),
-    r2Upload(BUCKET_PRIVATE, origKey, buffer, contentType || "application/octet-stream"),
+    r2Upload(
+      BUCKET_PRIVATE,
+      originalKey,
+      buffer,
+      contentType || "application/octet-stream",
+    ),
   ]);
 
-  const { error } = await supabase.from("media_items").insert({
-    id: mediaId,
-    gallery_id: galleryId,
+  const pb = await superuserPb();
+  const rec = await pb.collection("media_items").create<{ id: string }>({
+    gallery: galleryId,
     type: "photo",
-    drive_file_id: driveFileId ?? null,
-    filename: filename ?? null,
-    preview_key: previewKey,
-    thumb_key: thumbKey,
-    original_key: origKey,
-    width,
-    height,
-    status: "ready",
-    position,
-  });
-  if (error) throw new Error(error.message);
-
-  return { mediaId, previewKey, thumbKey };
-}
-
-export interface StorePhotoFromKeyOpts {
-  galleryId: string;
-  mediaId: string;
-  originalKey: string;
-  contentType: string;
-  position: number;
-  watermarkText: string;
-  filename?: string | null;
-}
-
-/**
- * Versão do storePhoto para upload presigned: o original já está no R2 privado,
- * só baixa, gera preview/thumb com marca d'água e insere em media_items.
- */
-export async function storePhotoFromR2Key(
-  supabase: SupabaseClient,
-  opts: StorePhotoFromKeyOpts,
-): Promise<StoredPhoto> {
-  const { galleryId, mediaId, originalKey, contentType, position, watermarkText, filename } = opts;
-
-  const buffer = await r2Download(BUCKET_PRIVATE, originalKey);
-  const { preview, thumb, width, height } = await processImage(buffer, { text: watermarkText });
-
-  const previewKey = `${galleryId}/${mediaId}.webp`;
-  const thumbKey = `${galleryId}/${mediaId}_t.webp`;
-
-  await Promise.all([
-    r2Upload(BUCKET_PUBLIC, previewKey, preview, "image/webp"),
-    r2Upload(BUCKET_PUBLIC, thumbKey, thumb, "image/webp"),
-  ]);
-
-  const { error } = await supabase.from("media_items").insert({
-    id: mediaId,
-    gallery_id: galleryId,
-    type: "photo",
-    filename: filename ?? null,
+    drive_file_id: driveFileId ?? "",
+    filename: filename ?? "",
     preview_key: previewKey,
     thumb_key: thumbKey,
     original_key: originalKey,
@@ -112,7 +77,55 @@ export async function storePhotoFromR2Key(
     status: "ready",
     position,
   });
-  if (error) throw new Error(error.message);
 
-  return { mediaId, previewKey, thumbKey };
+  return { mediaId: rec.id, previewKey, thumbKey };
+}
+
+export interface StorePhotoFromKeyOpts {
+  galleryId: string;
+  /** Id do objeto no R2 (o mesmo usado para montar `originalKey` no presign). */
+  objectId: string;
+  originalKey: string;
+  position: number;
+  watermarkText: string;
+  filename?: string | null;
+}
+
+/**
+ * Versão do `storePhoto` para upload presigned: o original já está no R2
+ * privado, então só baixa, gera preview/thumb com marca d'água e registra.
+ */
+export async function storePhotoFromR2Key(
+  opts: StorePhotoFromKeyOpts,
+): Promise<StoredPhoto> {
+  const { galleryId, objectId, originalKey, position, watermarkText, filename } =
+    opts;
+
+  const buffer = await r2Download(BUCKET_PRIVATE, originalKey);
+  const { preview, thumb, width, height } = await processImage(buffer, {
+    text: watermarkText,
+  });
+
+  const { previewKey, thumbKey } = keysFor(galleryId, objectId);
+
+  await Promise.all([
+    r2Upload(BUCKET_PUBLIC, previewKey, preview, "image/webp"),
+    r2Upload(BUCKET_PUBLIC, thumbKey, thumb, "image/webp"),
+  ]);
+
+  const pb = await superuserPb();
+  const rec = await pb.collection("media_items").create<{ id: string }>({
+    gallery: galleryId,
+    type: "photo",
+    filename: filename ?? "",
+    preview_key: previewKey,
+    thumb_key: thumbKey,
+    original_key: originalKey,
+    width,
+    height,
+    status: "ready",
+    position,
+  });
+
+  return { mediaId: rec.id, previewKey, thumbKey };
 }

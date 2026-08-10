@@ -1,25 +1,25 @@
 "use server";
 
 import { cookies } from "next/headers";
-import { createClient } from "@/lib/supabase/server";
+import {
+  saveGallerySelection,
+  submitGallerySelection,
+} from "@/lib/pb/gallery";
 import { sessionCookieName } from "./access";
 import { notifySelectionSubmitted } from "@/lib/notifications";
+
+async function sessionFor(token: string): Promise<string | null> {
+  const jar = await cookies();
+  return jar.get(sessionCookieName(token))?.value ?? null;
+}
 
 export async function saveSelectionAction(
   token: string,
   mediaIds: string[],
 ): Promise<{ ok?: boolean; error?: string }> {
-  const jar = await cookies();
-  const session = jar.get(sessionCookieName(token))?.value;
+  const session = await sessionFor(token);
   if (!session) return { error: "Sessão inválida." };
-
-  const supabase = await createClient();
-  const { error } = await supabase.rpc("save_gallery_selection", {
-    p_session: session,
-    p_media_ids: mediaIds,
-  });
-  if (error) return { error: error.message };
-  return { ok: true };
+  return saveGallerySelection(session, mediaIds);
 }
 
 /** Salva e ENVIA a seleção (trava). A fotógrafa passa a ver como "enviada". */
@@ -27,16 +27,11 @@ export async function submitSelectionAction(
   token: string,
   mediaIds: string[],
 ): Promise<{ ok?: boolean; error?: string }> {
-  const jar = await cookies();
-  const session = jar.get(sessionCookieName(token))?.value;
+  const session = await sessionFor(token);
   if (!session) return { error: "Sessão inválida." };
 
-  const supabase = await createClient();
-  const { error } = await supabase.rpc("submit_gallery_selection", {
-    p_session: session,
-    p_media_ids: mediaIds,
-  });
-  if (error) return { error: error.message };
+  const res = await submitGallerySelection(session, mediaIds);
+  if (res.error) return res;
 
   await notifySelectionSubmitted(session);
   return { ok: true };

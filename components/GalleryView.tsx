@@ -3,10 +3,11 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Heart, Loader2, Sparkles, ChevronRight } from "lucide-react";
+import { Heart, Loader2, Sparkles, ChevronRight, Package } from "lucide-react";
 import { MediaTile } from "./MediaTile";
 import { Lightbox } from "./Lightbox";
-import { useSelectedIds, useSelectionStore } from "@/store/selection";
+import { PackagesModal } from "./PackagesModal";
+import { useSelectedIds, useSelectionStore, useContractedPlan } from "@/store/selection";
 import { useHydrated } from "@/lib/useHydrated";
 import type { MediaType, PublicGallery } from "@/lib/types";
 
@@ -17,17 +18,29 @@ export function GalleryView({ gallery }: { gallery: PublicGallery }) {
   const router = useRouter();
   const [tab, setTab] = useState<MediaType>("photo");
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [showPackages, setShowPackages] = useState(false);
   const [pending, startTransition] = useTransition();
+  const hasPlans = gallery.plans.length > 0;
   const selectedIds = useSelectedIds(token);
   const toggle = useSelectionStore((s) => s.toggle);
+  const contractPlan = useSelectionStore((s) => s.contractPlan);
+  const contractedPlan = useContractedPlan(token);
   const hydrated = useHydrated();
 
   const photos = gallery.media.filter((m) => m.type === "photo");
   const videos = gallery.media.filter((m) => m.type === "video");
   const visible = tab === "photo" ? photos : videos;
   const count = hydrated ? Object.keys(selectedIds).length : 0;
-  const limit =
-    gallery.selectionMode === "quota" ? (gallery.selectionLimit ?? null) : null;
+
+  const baseLimit =
+    gallery.selectionMode === "quota" ? (gallery.selectionLimit ?? 0) : null;
+  const limit: number | null = (() => {
+    if (baseLimit === null) return null;
+    if (!contractedPlan || contractedPlan.mediaType !== "photo") return baseLimit;
+    if (contractedPlan.kind === "full") return null; // plano completo = sem limite
+    if (contractedPlan.kind === "package") return baseLimit + (contractedPlan.includedQty ?? 0);
+    return baseLimit; // single: sem alteração de cota
+  })();
 
   // Paginação de render (centenas de fotos): mostra aos poucos.
   const [shown, setShown] = useState(PAGE_SIZE);
@@ -59,14 +72,25 @@ export function GalleryView({ gallery }: { gallery: PublicGallery }) {
             <h1 className="font-display text-2xl text-primary">{gallery.title}</h1>
             <p className="label-caps">{gallery.studioName}</p>
           </div>
-          <div className="flex items-center gap-2 rounded-full border border-border bg-bege px-3 py-1.5">
-            <Heart className="h-4 w-4 text-accent" />
-            <span className="text-sm font-medium text-primary">
-              {count}
-              {limit != null && (
-                <span className="text-muted-foreground"> / {limit}</span>
-              )}
-            </span>
+          <div className="flex items-center gap-3">
+            {hasPlans && (
+              <button
+                type="button"
+                onClick={() => setShowPackages(true)}
+                className="inline-flex items-center gap-1.5 text-sm text-accent hover:underline"
+              >
+                <Package className="h-4 w-4" /> Ver pacotes
+              </button>
+            )}
+            <div className="flex items-center gap-2 rounded-full border border-border bg-bege px-3 py-1.5">
+              <Heart className="h-4 w-4 text-accent" />
+              <span className="text-sm font-medium text-primary">
+                {count}
+                {limit != null && (
+                  <span className="text-muted-foreground"> / {limit}</span>
+                )}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -143,6 +167,23 @@ export function GalleryView({ gallery }: { gallery: PublicGallery }) {
           startIndex={lightboxIndex}
           token={token}
           onClose={() => setLightboxIndex(null)}
+        />
+      )}
+
+      {showPackages && (
+        <PackagesModal
+          plans={gallery.plans}
+          contractedPlanId={contractedPlan?.id ?? null}
+          onContract={(plan) => {
+            contractPlan(token, plan);
+            if (plan) {
+              setShowPackages(false);
+              if (plan.kind === "full") {
+                startTransition(() => router.push(`/g/${token}/selecao`));
+              }
+            }
+          }}
+          onClose={() => setShowPackages(false)}
         />
       )}
     </div>
