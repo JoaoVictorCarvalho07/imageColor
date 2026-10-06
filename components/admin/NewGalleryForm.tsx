@@ -33,6 +33,18 @@ export function NewGalleryForm() {
         />
       </Field>
 
+      <Field
+        label="E-mail da cliente"
+        hint="Para avisar quando a entrega sair"
+      >
+        <input
+          name="clientEmail"
+          type="email"
+          placeholder="marina@email.com"
+          className="w-full rounded-md border border-border bg-card px-3 py-2.5 text-foreground outline-none focus:border-accent"
+        />
+      </Field>
+
       <div className="grid grid-cols-2 gap-4">
         <Field label="Senha de acesso" hint="Em branco = gerada">
           <input
