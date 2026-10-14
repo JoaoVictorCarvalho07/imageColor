@@ -4,15 +4,26 @@ import path from "node:path";
 
 import { sessionCookieName } from "@/lib/access";
 import { superuserPb } from "@/lib/pb/superuser";
+import { getAdminUser } from "@/lib/pb/session";
 import {
   createGallery,
   setGalleryPassword,
   getGalleryPublicInfo,
   openGallerySession,
   getSessionGallery,
+  getSessionDownloads,
   saveGallerySelection,
   submitGallerySelection,
 } from "@/lib/pb/gallery";
+import { processPayment, reopenSelection } from "@/lib/pb/orders";
+import {
+  createPreference,
+  isMercadoPagoConfigured,
+  verifyWebhookSignature,
+} from "@/lib/mercadopago";
+import { createHmac } from "node:crypto";
+import { quoteSelection } from "@/lib/pricing";
+import type { PricingPlan } from "@/lib/types";
 import {
   storePhoto,
   storePhotoFromR2Key,
@@ -32,7 +43,8 @@ import { WATERMARK_TEXT } from "@/lib/studio";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-const DEFAULT_IMAGE_DIR = "C:/Users/jvcar/OneDrive/Documentos/teste-imagens";
+const IMAGE_DIR =
+  process.env.E2E_IMAGE_DIR ?? "C:/Users/jvcar/OneDrive/Documentos/teste-imagens";
 const PHOTO_COUNT = 4;
 
 interface Step {
@@ -81,12 +93,15 @@ async function objectExists(bucket: string, key: string): Promise<boolean> {
 }
 
 export async function GET(req: NextRequest) {
-  if (process.env.NODE_ENV === "production") {
+  if (
+    process.env.NODE_ENV === "production" ||
+    process.env.ENABLE_DEV_E2E !== "1" ||
+    !(await getAdminUser())
+  ) {
     return NextResponse.json({ error: "Indisponível" }, { status: 404 });
   }
 
-  const imageDir =
-    req.nextUrl.searchParams.get("dir") ?? DEFAULT_IMAGE_DIR;
+  const imageDir = IMAGE_DIR;
 
   const suite = new Suite();
   const pb = await superuserPb();
@@ -276,7 +291,11 @@ export async function GET(req: NextRequest) {
     });
 
     await suite.run("cliente: salva seleção parcial", async () => {
-      const res = await saveGallerySelection(session, mediaIds.slice(0, 3));
+      const res = await saveGallerySelection(session, {
+        mediaIds: mediaIds.slice(0, 3),
+        photoPlanId: null,
+        videoPlanId: null,
+      });
       assert(!res.error, `saveGallerySelection falhou: ${res.error}`);
       const g = await getSessionGallery(session);
       assert(g!.selectionStatus === "open", `status deveria ser open, veio ${g!.selectionStatus}`);
@@ -298,6 +317,97 @@ export async function GET(req: NextRequest) {
       assert(sel.media.length === 3, `${sel.media.length} fotos na seleção`);
       assert(sel.submitted_at, "submitted_at vazio");
       return `3 fotos, enviada em ${sel.submitted_at.slice(0, 16)}`;
+    });
+
+    await suite.run("cliente: seleção enviada fica travada", async () => {
+      const res = await saveGallerySelection(session, {
+        mediaIds: mediaIds.slice(0, 1),
+        photoPlanId: null,
+        videoPlanId: null,
+      });
+      assert(res.error, "seleção enviada aceitou alteração");
+      return "alteração recusada";
+    });
+
+    await suite.run("admin: reabre a seleção", async () => {
+      const reaberta = await reopenSelection(galleryId);
+      assert(reaberta.ok, `reopenSelection falhou: ${reaberta.error}`);
+      const g = await getSessionGallery(session);
+      assert(g!.selectionStatus === "open", `status ${g!.selectionStatus}`);
+      return "status open";
+    });
+
+    await suite.run("cliente: ids de fora da galeria são ignorados", async () => {
+      const res = await saveGallerySelection(session, {
+        mediaIds: [...mediaIds.slice(0, 3), mediaIds[0], "idforadagaleria"],
+        photoPlanId: null,
+        videoPlanId: null,
+      });
+      assert(!res.error, `save falhou: ${res.error}`);
+      const g = await getSessionGallery(session);
+      assert(g!.selection.mediaIds.length === 3, `${g!.selection.mediaIds.length} ids gravados`);
+      return "3 ids válidos, duplicata e id estranho descartados";
+    });
+
+    await suite.run("cliente: cota sem preço de extra bloqueia excesso", async () => {
+      await pb.collection("galleries").update(galleryId, {
+        selection_mode: "quota",
+        selection_limit: 2,
+        extra_photo_cents: null,
+      });
+      const res = await saveGallerySelection(session, {
+        mediaIds: mediaIds.slice(0, 3),
+        photoPlanId: null,
+        videoPlanId: null,
+      });
+      await pb.collection("galleries").update(galleryId, { selection_mode: "free" });
+      assert(res.error, "excesso sem preço foi aceito");
+      return "3 fotos com cota 2 recusadas";
+    });
+
+    await suite.run("cliente: pacote contratado fica no servidor", async () => {
+      const g = await getSessionGallery(session);
+      const pacote = g!.plans.find((p) => p.kind === "package")!;
+      const res = await saveGallerySelection(session, {
+        mediaIds: mediaIds.slice(0, 3),
+        photoPlanId: pacote.id,
+        videoPlanId: null,
+      });
+      assert(!res.error, `save falhou: ${res.error}`);
+      assert(res.quote!.totalCents === pacote.priceCents, `total ${res.quote!.totalCents}`);
+      const depois = await getSessionGallery(session);
+      assert(depois!.selection.photoPlanId === pacote.id, "pacote não persistiu");
+      return `pacote ${pacote.name}, total ${res.quote!.totalCents}`;
+    });
+
+    await suite.run("preço: cálculo do total", async () => {
+      const plans: PricingPlan[] = [
+        { id: "a", mediaType: "photo", kind: "single", name: "Avulsa", priceCents: 2500 },
+        { id: "p", mediaType: "photo", kind: "package", name: "Prata", includedQty: 10, priceCents: 50000, extraItemCents: 2000 },
+        { id: "f", mediaType: "photo", kind: "full", name: "Completo", priceCents: 120000 },
+        { id: "v", mediaType: "video", kind: "single", name: "Vídeo", priceCents: 9000 },
+      ];
+      const quota = { selectionMode: "quota" as const, selectionLimit: 5, extraPhotoCents: 3000, plans };
+      const casos: [string, number, number][] = [
+        ["cota, 7 fotos, sem pacote", quoteSelection(quota, { photoCount: 7, videoCount: 0, photoPlanId: null, videoPlanId: null }).totalCents, 6000],
+        ["cota + prata, 17 fotos", quoteSelection(quota, { photoCount: 17, videoCount: 0, photoPlanId: "p", videoPlanId: null }).totalCents, 54000],
+        ["cota + avulsa, 7 fotos", quoteSelection(quota, { photoCount: 7, videoCount: 0, photoPlanId: "a", videoPlanId: null }).totalCents, 5000],
+        ["completo + 2 vídeos", quoteSelection(quota, { photoCount: 40, videoCount: 2, photoPlanId: "f", videoPlanId: null }).totalCents, 138000],
+        ["livre, sem pacote", quoteSelection({ ...quota, selectionMode: "free" }, { photoCount: 30, videoCount: 0, photoPlanId: null, videoPlanId: null }).totalCents, 0],
+      ];
+      for (const [nome, veio, esperado] of casos) {
+        assert(veio === esperado, `${nome}: ${veio} (esperado ${esperado})`);
+      }
+      return `${casos.length} cenários`;
+    });
+
+    await suite.run("cliente: reenvia a seleção", async () => {
+      await saveGallerySelection(session, {
+        mediaIds: mediaIds.slice(0, 3),
+        photoPlanId: null,
+        videoPlanId: null,
+      });
+      return submitSelectionChecked(session, mediaIds.slice(0, 3));
     });
 
     await suite.run("admin: modo cota reflete na galeria", async () => {
@@ -331,9 +441,10 @@ export async function GET(req: NextRequest) {
         .update(galleryId, { delivered_at: new Date().toISOString() });
 
       const g = await getSessionGallery(session);
+      const finals = (await getSessionDownloads(session))!;
       assert(g!.downloadReady, "downloadReady false após publicar");
-      assert(g!.finals!.length === 1, `${g!.finals!.length} finais`);
-      assert(g!.finals![0].bucket === "finals", "bucket deveria ser finals");
+      assert(finals.length === 1, `${finals.length} finais`);
+      assert(finals[0].bucket === "finals", "bucket deveria ser finals");
       return "1 final publicada, downloadReady";
     });
 
@@ -391,9 +502,10 @@ export async function GET(req: NextRequest) {
         .collection("galleries")
         .update(galleryId, { delivery_mode: "direct", delivered_at: "" });
       const g = await getSessionGallery(session);
+      const finals = (await getSessionDownloads(session))!;
       assert(g!.downloadReady, "downloadReady false no modo direto");
-      assert(g!.finals!.length === 3, `${g!.finals!.length} originais (esperado 3)`);
-      assert(g!.finals![0].bucket === "originals", "bucket deveria ser originals");
+      assert(finals.length === 3, `${finals.length} originais (esperado 3)`);
+      assert(finals[0].bucket === "originals", "bucket deveria ser originals");
       await pb.collection("galleries").update(galleryId, { delivery_mode: "edit" });
       return "3 originais liberados";
     });
@@ -455,8 +567,138 @@ export async function GET(req: NextRequest) {
       return "recusada corretamente";
     });
 
-    await suite.run("pagamento: checkout", async () => {
-      throw new Error("não implementado — nenhum código de Mercado Pago no projeto");
+    let pedidoId = "";
+    const pagamentoId = `e2e-${Date.now()}`;
+
+    await suite.run("pagamento: seleção com valor fica pendente e bloqueia download", async () => {
+      const reaberta = await reopenSelection(galleryId);
+      assert(reaberta.ok, `reopen falhou: ${reaberta.error}`);
+      await pb.collection("galleries").update(galleryId, {
+        delivery_mode: "direct",
+        selection_mode: "quota",
+        selection_limit: 1,
+        extra_photo_cents: 2500,
+      });
+      const res = await submitGallerySelection(session, {
+        mediaIds: mediaIds.slice(0, 2),
+        photoPlanId: null,
+        videoPlanId: null,
+      });
+      assert(!res.error, `submit falhou: ${res.error}`);
+      assert(res.quote!.totalCents === 2500, `total ${res.quote!.totalCents}`);
+      const g = await getSessionGallery(session);
+      assert(g!.payment.status === "pending", `pagamento ${g!.payment.status}`);
+      assert(!g!.downloadReady, "download liberado sem pagamento");
+      const finals = await getSessionDownloads(session);
+      assert(finals!.length === 0, `${finals!.length} arquivos liberados sem pagamento`);
+      return "R$ 25,00 pendente, download bloqueado";
+    });
+
+    await suite.run("pagamento: valor divergente não libera", async () => {
+      const sel = await pb
+        .collection("selections")
+        .getFirstListItem<{ id: string; media: string[] }>(
+          pb.filter("gallery = {:g}", { g: galleryId }),
+        );
+      const pedido = await pb.collection("orders").create<{ id: string }>({
+        gallery: galleryId,
+        selection: sel.id,
+        status: "pending",
+        amount_cents: 2500,
+        media: sel.media,
+      });
+      pedidoId = pedido.id;
+      const outcome = await processPayment({
+        id: `${pagamentoId}-baixo`,
+        status: "approved",
+        external_reference: pedidoId,
+        transaction_amount: 10,
+        currency_id: "BRL",
+        payment_type_id: "bank_transfer",
+      });
+      assert(outcome === "amount_mismatch", `resultado ${outcome}`);
+      const finals = await getSessionDownloads(session);
+      assert(finals!.length === 0, "liberou com valor menor");
+      return "R$ 10,00 para pedido de R$ 25,00 recusado";
+    });
+
+    await suite.run("pagamento: aprovado libera e é idempotente", async () => {
+      const pagamento = {
+        id: pagamentoId,
+        status: "approved",
+        external_reference: pedidoId,
+        transaction_amount: 25,
+        currency_id: "BRL",
+        payment_type_id: "bank_transfer",
+      };
+      const primeiro = await processPayment(pagamento);
+      const segundo = await processPayment(pagamento);
+      assert(primeiro === "paid" && segundo === "paid", `${primeiro} / ${segundo}`);
+
+      const eventos = await pb.collection("payment_events").getFullList({
+        filter: pb.filter("key = {:k}", { k: `${pagamentoId}:approved` }),
+      });
+      assert(eventos.length === 1, `${eventos.length} eventos para o mesmo pagamento`);
+
+      const pedido = await pb.collection("orders").getOne<{ status: string }>(pedidoId);
+      assert(pedido.status === "paid", `pedido ${pedido.status}`);
+      const g = await getSessionGallery(session);
+      assert(g!.payment.status === "paid", `seleção ${g!.payment.status}`);
+      const finals = await getSessionDownloads(session);
+      assert(finals!.length === 2, `${finals!.length} originais (esperado 2)`);
+      return "pedido pago, 2 originais liberados, evento único";
+    });
+
+    await suite.run("pagamento: seleção paga não reabre", async () => {
+      const res = await reopenSelection(galleryId);
+      assert(res.error, "seleção paga foi reaberta");
+      return "reabertura recusada";
+    });
+
+    await suite.run("pagamento: estorno volta a bloquear", async () => {
+      const outcome = await processPayment({
+        id: pagamentoId,
+        status: "refunded",
+        external_reference: pedidoId,
+        transaction_amount: 25,
+        currency_id: "BRL",
+        payment_type_id: "bank_transfer",
+      });
+      assert(outcome === "refunded", `resultado ${outcome}`);
+      const finals = await getSessionDownloads(session);
+      assert(finals!.length === 0, "download continua liberado após estorno");
+      await pb.collection("galleries").update(galleryId, { delivery_mode: "edit" });
+      return "download bloqueado de novo";
+    });
+
+    await suite.run("pagamento: assinatura do webhook", async () => {
+      const secret = "segredo-e2e";
+      const ts = String(Date.now());
+      const manifest = `id:123456;request-id:req-1;ts:${ts};`;
+      const v1 = createHmac("sha256", secret).update(manifest).digest("hex");
+      const header = `ts=${ts},v1=${v1}`;
+      assert(
+        verifyWebhookSignature({ signatureHeader: header, requestId: "req-1", dataId: "123456", secret }),
+        "assinatura válida recusada",
+      );
+      assert(
+        !verifyWebhookSignature({ signatureHeader: header, requestId: "req-1", dataId: "999", secret }),
+        "assinatura adulterada aceita",
+      );
+      return "válida aceita, adulterada recusada";
+    });
+
+    await suite.run("pagamento: preferência no Mercado Pago", async () => {
+      if (!isMercadoPagoConfigured()) return "pulado: MERCADOPAGO_ACCESS_TOKEN ausente";
+      const pref = await createPreference({
+        orderId: `e2e-${Date.now()}`,
+        title: "[E2E] Ensaio",
+        amountCents: 2500,
+        backUrl: `${req.nextUrl.origin}/g/${accessToken}/selecao`,
+        notificationUrl: null,
+      });
+      assert(pref.checkoutUrl.startsWith("https://"), `url ${pref.checkoutUrl}`);
+      return `preferência ${pref.id}`;
     });
   } catch (err) {
     suite.steps.push({
@@ -511,7 +753,11 @@ async function submitSelectionChecked(
   session: string,
   ids: string[],
 ): Promise<string> {
-  const res = await submitGallerySelection(session, ids);
+  const res = await submitGallerySelection(session, {
+    mediaIds: ids,
+    photoPlanId: null,
+    videoPlanId: null,
+  });
   assert(!res.error, `submitGallerySelection falhou: ${res.error}`);
   const g = await getSessionGallery(session);
   assert(

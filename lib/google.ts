@@ -1,12 +1,15 @@
+import "server-only";
+
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const DRIVE_FILES = "https://www.googleapis.com/drive/v3/files";
-// `userinfo.email` é o que permite descobrir QUAL conta foi conectada — sem
-// ele o endpoint /oauth2/v2/userinfo responde 403.
 const SCOPE = [
   "https://www.googleapis.com/auth/drive.readonly",
   "https://www.googleapis.com/auth/userinfo.email",
 ].join(" ");
+
+const LIST_TIMEOUT_MS = 30_000;
+const DOWNLOAD_TIMEOUT_MS = 120_000;
 
 function env(name: string): string {
   const v = process.env[name];
@@ -21,7 +24,7 @@ export function buildAuthUrl(state: string): string {
     response_type: "code",
     scope: SCOPE,
     access_type: "offline",
-    prompt: "consent", // garante refresh_token
+    prompt: "consent",
     include_granted_scopes: "true",
     state,
   });
@@ -66,7 +69,6 @@ export async function refreshAccessToken(refreshToken: string): Promise<string> 
   return data.access_token;
 }
 
-/** Extrai o ID da pasta de um link do Drive ou aceita o ID puro. */
 export function parseFolderId(input: string): string | null {
   const trimmed = input.trim();
   const m = trimmed.match(/\/folders\/([a-zA-Z0-9_-]+)/);
@@ -79,9 +81,9 @@ export interface DriveFile {
   id: string;
   name: string;
   mimeType: string;
+  size?: string;
 }
 
-/** Lista todas as imagens (paginado) de uma pasta. */
 export async function listFolderImages(
   accessToken: string,
   folderId: string,
@@ -91,13 +93,14 @@ export async function listFolderImages(
   do {
     const params = new URLSearchParams({
       q: `'${folderId}' in parents and trashed = false and mimeType contains 'image/'`,
-      fields: "nextPageToken, files(id, name, mimeType)",
+      fields: "nextPageToken, files(id, name, mimeType, size)",
       pageSize: "100",
       orderBy: "name_natural",
     });
     if (pageToken) params.set("pageToken", pageToken);
     const res = await fetch(`${DRIVE_FILES}?${params.toString()}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`Falha ao listar pasta: ${await res.text()}`);
     const data = (await res.json()) as {
@@ -110,13 +113,88 @@ export async function listFolderImages(
   return files;
 }
 
+export class DriveHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+export interface DriveSession {
+  accessToken: string;
+  refreshToken: string;
+}
+
+export interface DownloadOptions {
+  retries?: number;
+  timeoutMs?: number;
+  deadlineAt?: number;
+}
+
 export async function downloadFile(
   accessToken: string,
   fileId: string,
+  timeoutMs = DOWNLOAD_TIMEOUT_MS,
 ): Promise<Buffer> {
-  const res = await fetch(`${DRIVE_FILES}/${fileId}?alt=media`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  if (!res.ok) throw new Error(`Falha ao baixar arquivo: ${await res.text()}`);
+  const res = await fetch(
+    `${DRIVE_FILES}/${encodeURIComponent(fileId)}?alt=media`,
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    },
+  );
+  if (!res.ok) {
+    throw new DriveHttpError(res.status, `Falha ao baixar arquivo (${res.status}).`);
+  }
   return Buffer.from(await res.arrayBuffer());
+}
+
+const isRetryable = (err: unknown): boolean => {
+  if (err instanceof DriveHttpError) {
+    return err.status === 408 || err.status === 429 || err.status >= 500;
+  }
+  return true;
+};
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export async function downloadFileResilient(
+  session: DriveSession,
+  fileId: string,
+  options: DownloadOptions = {},
+): Promise<Buffer> {
+  const {
+    retries = 2,
+    timeoutMs = DOWNLOAD_TIMEOUT_MS,
+    deadlineAt = Number.POSITIVE_INFINITY,
+  } = options;
+
+  let refreshed = false;
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const remaining = deadlineAt - Date.now();
+    if (remaining < 2_000) break;
+    try {
+      return await downloadFile(
+        session.accessToken,
+        fileId,
+        Math.min(timeoutMs, remaining),
+      );
+    } catch (err) {
+      lastError = err;
+      if (err instanceof DriveHttpError && err.status === 401 && !refreshed) {
+        refreshed = true;
+        session.accessToken = await refreshAccessToken(session.refreshToken);
+        attempt--;
+        continue;
+      }
+      if (!isRetryable(err) || attempt === retries) break;
+      await sleep(1_000 * 2 ** attempt + Math.random() * 250);
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Falha ao baixar arquivo do Drive.");
 }

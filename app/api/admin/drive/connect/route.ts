@@ -15,6 +15,7 @@ export async function GET(req: NextRequest) {
   const jar = await cookies();
   jar.set("drive_oauth_state", state, {
     httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
     maxAge: 600,

@@ -4,6 +4,13 @@ import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { UploadCloud, Loader2, CheckCircle2, Send, EyeOff } from "lucide-react";
 import { setDeliveryPublishedAction } from "@/lib/galleryAdminActions";
+import { putFile, readError } from "@/lib/clientUpload";
+import {
+  isFinalType,
+  resolveContentType,
+  FINAL_MAX_BYTES,
+  formatLimit,
+} from "@/lib/mediaLimits";
 
 export function DeliveryManager({
   galleryId,
@@ -17,33 +24,89 @@ export function DeliveryManager({
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
+  const [failures, setFailures] = useState<{ name: string; reason: string }[]>([]);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [pending, startTransition] = useTransition();
   const published = !!deliveredAt;
 
+  async function uploadOne(file: File, label: string): Promise<void> {
+    const type = resolveContentType(file);
+    if (!isFinalType(type)) throw new Error("Formato não suportado.");
+    if (file.size > FINAL_MAX_BYTES) {
+      throw new Error(`Acima do limite de ${formatLimit(FINAL_MAX_BYTES)}.`);
+    }
+
+    setStatus(`Enviando${label}…`);
+    const presignRes = await fetch(`/api/admin/ensaios/${galleryId}/finals`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "presign",
+        filename: file.name,
+        type,
+        size: file.size,
+      }),
+    });
+    if (!presignRes.ok) {
+      throw new Error(await readError(presignRes, "Falha ao iniciar o envio."));
+    }
+    const { key, url } = await presignRes.json();
+
+    await putFile(url, file, type, (f) =>
+      setStatus(`Enviando${label} ${Math.round(f * 100)}%`),
+    );
+
+    setStatus(`Registrando${label}…`);
+    const registerRes = await fetch(`/api/admin/ensaios/${galleryId}/finals`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "register", key, filename: file.name }),
+    });
+    if (!registerRes.ok) {
+      throw new Error(
+        await readError(registerRes, `Erro ao registrar (${registerRes.status}).`),
+      );
+    }
+  }
+
   async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const files = e.target.files;
     if (!files || files.length === 0) return;
+    const arr = Array.from(files);
     setBusy(true);
     setMsg(null);
-    const fd = new FormData();
-    Array.from(files).forEach((f) => fd.append("files", f));
+    setFailures([]);
+
+    let done = 0;
+    const failed: { name: string; reason: string }[] = [];
     try {
-      const res = await fetch(`/api/admin/ensaios/${galleryId}/finals`, {
-        method: "POST",
-        body: fd,
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        setMsg({ ok: false, text: `Erro: ${json.error ?? res.status}` });
-      } else {
-        setMsg({ ok: true, text: `${json.count} arquivo(s) enviado(s) ✓` });
-        router.refresh();
+      for (let i = 0; i < arr.length; i++) {
+        const file = arr[i];
+        const label = arr.length > 1 ? ` ${i + 1}/${arr.length}` : "";
+        try {
+          await uploadOne(file, label);
+          done++;
+        } catch (err) {
+          failed.push({
+            name: file.name,
+            reason: err instanceof Error ? err.message : "Falha no envio.",
+          });
+        }
       }
-    } catch {
-      setMsg({ ok: false, text: "Falha no envio." });
+      setFailures(failed);
+      setMsg(
+        failed.length === 0
+          ? { ok: true, text: `${done} arquivo(s) enviado(s) ✓` }
+          : {
+              ok: false,
+              text: `${done} de ${arr.length} arquivo(s) enviado(s). ${failed.length} falhou(aram).`,
+            },
+      );
+      if (done > 0) router.refresh();
     } finally {
       setBusy(false);
+      setStatus("");
       if (inputRef.current) inputRef.current.value = "";
     }
   }
@@ -82,7 +145,7 @@ export function DeliveryManager({
           ) : (
             <UploadCloud className="h-4 w-4" />
           )}
-          {busy ? "Enviando…" : "Enviar fotos finais"}
+          {busy ? status || "Enviando…" : "Enviar fotos finais"}
         </button>
         {msg && (
           <span className={`text-sm ${msg.ok ? "text-accent" : "text-destructive"}`}>
@@ -90,6 +153,16 @@ export function DeliveryManager({
           </span>
         )}
       </div>
+
+      {failures.length > 0 && (
+        <ul className="mt-2 space-y-0.5 text-xs text-destructive">
+          {failures.map((f, i) => (
+            <li key={i}>
+              {f.name}: {f.reason}
+            </li>
+          ))}
+        </ul>
+      )}
 
       {finals.length > 0 && (
         <div className="scrollbar-none mt-3 max-h-44 overflow-auto rounded-md border border-border bg-background p-2 font-mono text-xs text-muted-foreground">

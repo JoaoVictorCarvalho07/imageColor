@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getAdminUser } from "@/lib/pb/session";
 import { superuserPb } from "@/lib/pb/superuser";
-import { r2Delete, BUCKET_PUBLIC, BUCKET_PRIVATE } from "@/lib/r2";
+import { r2DeleteBestEffort, BUCKET_PUBLIC, BUCKET_PRIVATE } from "@/lib/r2";
 
 export const runtime = "nodejs";
 
@@ -27,18 +27,19 @@ export async function DELETE(
     }>(mediaId)
     .catch(() => null);
 
-  // Confere que a mídia é mesmo deste ensaio — o id da galeria vem da URL.
   if (!item || item.gallery !== galleryId) {
     return NextResponse.json({ error: "Mídia não encontrada" }, { status: 404 });
   }
 
-  await Promise.allSettled([
-    item.preview_key ? r2Delete(BUCKET_PUBLIC, item.preview_key) : Promise.resolve(),
-    item.thumb_key ? r2Delete(BUCKET_PUBLIC, item.thumb_key) : Promise.resolve(),
-    item.original_key ? r2Delete(BUCKET_PRIVATE, item.original_key) : Promise.resolve(),
+  const [publicOk, privateOk] = await Promise.all([
+    r2DeleteBestEffort(
+      BUCKET_PUBLIC,
+      [item.preview_key, item.thumb_key],
+      `media:${mediaId}`,
+    ),
+    r2DeleteBestEffort(BUCKET_PRIVATE, [item.original_key], `media:${mediaId}`),
   ]);
 
-  // `selections.media` não tem cascade: a foto só sai da lista da seleção.
   try {
     await pb.collection("media_items").delete(mediaId);
   } catch (err) {
@@ -48,5 +49,9 @@ export async function DELETE(
     );
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json(
+    publicOk && privateOk
+      ? { ok: true }
+      : { ok: true, warning: "Alguns arquivos não puderam ser removidos do armazenamento." },
+  );
 }

@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Cormorant_Garamond, Jost } from "next/font/google";
 import "./globals.css";
 
@@ -23,16 +23,18 @@ export const metadata: Metadata = {
     "Selecione suas fotos e vídeos favoritos do seu ensaio com Isabel Pontes.",
 };
 
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html
-      lang="pt-BR"
-      className={`${cormorant.variable} ${jost.variable}`}
-      suppressHydrationWarning
-    >
-      <body suppressHydrationWarning>{children}</body>
+    <html lang="pt-BR" className={`${cormorant.variable} ${jost.variable}`}>
+      <body>{children}</body>
     </html>
   );
 }

@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
-import { browserPb } from "@/lib/pb/browser";
+import { browserPb, discardBrowserAuth } from "@/lib/pb/browser";
+import { createAdminSession } from "@/lib/actions";
 
 function GoogleMark() {
   return (
@@ -37,7 +38,15 @@ export default function LoginPage() {
     setLoading(true);
     setError(null);
     try {
-      await browserPb().collection("users").authWithOAuth2({ provider: "google" });
+      const pb = browserPb();
+      await pb.collection("users").authWithOAuth2({ provider: "google" });
+      const { ok } = await createAdminSession(pb.authStore.token);
+      discardBrowserAuth();
+      if (!ok) {
+        setError("Esta conta não tem acesso ao painel.");
+        setLoading(false);
+        return;
+      }
       router.push("/admin");
       router.refresh();
     } catch {

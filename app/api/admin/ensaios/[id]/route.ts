@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getAdminUser } from "@/lib/pb/session";
 import { superuserPb } from "@/lib/pb/superuser";
-import { r2DeleteMany, BUCKET_PUBLIC, BUCKET_PRIVATE } from "@/lib/r2";
+import { r2DeleteBestEffort, BUCKET_PUBLIC, BUCKET_PRIVATE } from "@/lib/r2";
 
 export const runtime = "nodejs";
 
@@ -48,13 +48,11 @@ export async function DELETE(
     if (f.storage_key) privateKeys.push(f.storage_key);
   }
 
-  await Promise.allSettled([
-    r2DeleteMany(BUCKET_PUBLIC, publicKeys),
-    r2DeleteMany(BUCKET_PRIVATE, privateKeys),
+  const [publicOk, privateOk] = await Promise.all([
+    r2DeleteBestEffort(BUCKET_PUBLIC, publicKeys, `galeria:${galleryId}`),
+    r2DeleteBestEffort(BUCKET_PRIVATE, privateKeys, `galeria:${galleryId}`),
   ]);
 
-  // As relações filhas têm cascadeDelete: apagar a galeria leva junto
-  // media_items, pricing_plans, final_assets, gallery_sessions e selections.
   try {
     await pb.collection("galleries").delete(galleryId);
   } catch (err) {
@@ -64,5 +62,9 @@ export async function DELETE(
     );
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json(
+    publicOk && privateOk
+      ? { ok: true }
+      : { ok: true, warning: "Alguns arquivos não puderam ser removidos do armazenamento." },
+  );
 }

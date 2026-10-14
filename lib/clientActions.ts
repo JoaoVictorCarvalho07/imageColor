@@ -1,12 +1,18 @@
 "use server";
 
 import { cookies } from "next/headers";
+import { saveGallerySelection, type SelectionResult } from "@/lib/pb/gallery";
 import {
-  saveGallerySelection,
-  submitGallerySelection,
-} from "@/lib/pb/gallery";
+  cancelCheckout,
+  resumeCheckout,
+  startCheckout,
+  syncSessionPayments,
+  type CheckoutResult,
+} from "@/lib/pb/orders";
 import { sessionCookieName } from "./access";
-import { notifySelectionSubmitted } from "@/lib/notifications";
+import type { SelectionDraft } from "@/lib/types";
+
+const INVALID_SESSION = { error: "Sessão inválida." };
 
 async function sessionFor(token: string): Promise<string | null> {
   const jar = await cookies();
@@ -15,24 +21,42 @@ async function sessionFor(token: string): Promise<string | null> {
 
 export async function saveSelectionAction(
   token: string,
-  mediaIds: string[],
-): Promise<{ ok?: boolean; error?: string }> {
+  draft: SelectionDraft,
+): Promise<SelectionResult> {
   const session = await sessionFor(token);
-  if (!session) return { error: "Sessão inválida." };
-  return saveGallerySelection(session, mediaIds);
+  if (!session) return INVALID_SESSION;
+  return saveGallerySelection(session, draft);
 }
 
-/** Salva e ENVIA a seleção (trava). A fotógrafa passa a ver como "enviada". */
-export async function submitSelectionAction(
+export async function checkoutAction(
   token: string,
-  mediaIds: string[],
-): Promise<{ ok?: boolean; error?: string }> {
+  draft: SelectionDraft,
+): Promise<CheckoutResult> {
   const session = await sessionFor(token);
-  if (!session) return { error: "Sessão inválida." };
+  if (!session) return INVALID_SESSION;
+  return startCheckout(session, draft);
+}
 
-  const res = await submitGallerySelection(session, mediaIds);
-  if (res.error) return res;
+export async function resumeCheckoutAction(token: string): Promise<CheckoutResult> {
+  const session = await sessionFor(token);
+  if (!session) return INVALID_SESSION;
+  return resumeCheckout(session);
+}
 
-  await notifySelectionSubmitted(session);
-  return { ok: true };
+export async function cancelCheckoutAction(token: string): Promise<CheckoutResult> {
+  const session = await sessionFor(token);
+  if (!session) return INVALID_SESSION;
+  return cancelCheckout(session);
+}
+
+export async function refreshPaymentAction(token: string): Promise<{ ok?: boolean; error?: string }> {
+  const session = await sessionFor(token);
+  if (!session) return INVALID_SESSION;
+  try {
+    await syncSessionPayments(session);
+    return { ok: true };
+  } catch (err) {
+    console.error("[payment] refresh failed:", err);
+    return { error: "Não foi possível consultar o pagamento agora." };
+  }
 }

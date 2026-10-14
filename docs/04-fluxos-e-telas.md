@@ -1,4 +1,9 @@
-# 03 — Fluxos & Telas
+# 04 — Fluxos & Telas
+
+> **Status:** o pagamento é implementado (Mercado Pago Checkout Pro). A cliente paga logo após
+> montar a seleção; o dashboard financeiro consolidado e a tela de pedidos (A7) **ainda não
+> existem** e estão marcados como _(planejado)_. Os wireframes continuam válidos como alvo de design.
+> Com total maior que zero, a entrega (modo edição ou direto) só libera após o pagamento confirmado.
 
 ## 1. Jornada completa (visão macro)
 
@@ -9,21 +14,26 @@ Fotografa/filma  →   Sobe pro Google Drive           →   Recebe link + senha
                      Importa mídias                       Vê Fotos / Vídeos (abas)       (links assinados)
                      Sistema gera marca d'água            Seleciona favoritas
                      Define preços/pacotes                Escolhe pacote
-                     Gera link + senha → envia            Paga (Pix/cartão)
+                     Gera link + senha → envia            Envia a seleção e paga (Pix/cartão)
 ```
 
 ---
 
 ## 2. Fluxo da Fotógrafa (Admin)
 
-1. **Login** no painel.
+1. **Login** com Google (somente e-mails da allowlist).
 2. **Conectar Google Drive** (uma vez).
-3. **Novo ensaio:** título, cliente, selecionar **pasta do Drive**, data de expiração.
-4. **Importar mídias** → acompanhar status (importando → marca d'água → pronto).
-5. **Configurar preços:** pacotes de fotos, fotos avulsas, preço de vídeos, galeria completa.
-6. **Gerar link + senha** e enviar para a cliente (copiar link / e-mail).
-7. **Acompanhar** seleção e pagamento em tempo real.
-8. **Financeiro:** ver recebidos e pendentes.
+3. **Novo ensaio:** título, nome e e-mail da cliente, senha e prazo de acesso.
+4. **Adicionar mídias:** importar uma **pasta do Drive** (fotos) ou enviar fotos e vídeos direto
+   do computador; o progresso aparece durante o processamento (marca d'água).
+5. **Configurar o ensaio:** modo de seleção (livre ou por cota), destino da seleção (edição ou
+   direto), prazos e **planos de preço** (pacotes, avulso, galeria completa, vídeos).
+6. **Copiar o link do ensaio** e enviar para a cliente; a senha é definida no painel.
+7. **Acompanhar** a seleção enviada (a fotógrafa recebe e-mail e vê os nomes dos arquivos).
+8. **Entrega (modo edição):** subir as fotos editadas e **publicar**; a cliente é avisada por e-mail.
+9. **Pagamento:** ver no ensaio se a seleção está **Aguardando pagamento** ou **Paga** (método e
+   data) e, se a cliente pagou fora da plataforma, usar **Marcar como pago**. Seleção paga não
+   pode ser reaberta. Dashboard financeiro consolidado: _(planejado)_.
 
 ## 3. Fluxo da Cliente
 
@@ -31,8 +41,13 @@ Fotografa/filma  →   Sobe pro Google Drive           →   Recebe link + senha
 2. **Galeria:** navega nas abas **Fotos** e **Vídeos** (previews com marca d'água).
 3. **Selecionar:** toca no coração/checkbox; vê contador da seleção.
 4. **Revisar seleção:** abre o carrinho, confere itens, **escolhe pacote**, vê total.
-5. **Pagar:** Pix (QR/copia-e-cola) ou cartão.
-6. **Confirmação:** pagamento aprovado → **download** dos arquivos finais.
+5. **Pagar:** em "Ir para o pagamento", a seleção é enviada e travada e a cliente vai ao Mercado
+   Pago (Pix ou cartão em até 12x). Ao voltar, `/g/[token]/selecao` confirma o pagamento.
+   Se o total é zero, não há pagamento: a seleção só é enviada.
+6. **Pagamento pendente:** pode **Pagar agora** (retoma o checkout), **Já paguei, verificar**
+   (consulta o Mercado Pago) ou **Alterar seleção** (cancela o pedido e reabre a seleção).
+7. **Download** dos arquivos sem marca d'água, após o pagamento confirmado: quando a fotógrafa
+   publica a entrega (modo edição) ou logo após o pagamento (modo direto).
 
 ---
 
@@ -42,16 +57,13 @@ Fotografa/filma  →   Sobe pro Google Drive           →   Recebe link + senha
 | # | Tela | Função |
 |---|------|--------|
 | A1 | **Login** | Autenticação da fotógrafa. |
-| A2 | **Dashboard** | Visão geral: ensaios ativos, vendas do mês, pendências. |
-| A3 | **Lista de Ensaios** | Todos os ensaios com status e busca. |
-| A4 | **Novo/Editar Ensaio** | Dados do ensaio + conectar pasta do Drive. |
-| A5 | **Importação & Processamento** | Status de importação e geração de marca d'água. |
-| A6 | **Configuração de Preços/Pacotes** | Definir planos de fotos e vídeos. |
-| A7 | **Marca d'água (Configurações)** | Logo, opacidade, padrão. |
-| A8 | **Compartilhar Ensaio** | Link + senha, copiar/enviar por e-mail. |
-| A9 | **Detalhe do Ensaio / Seleção da Cliente** | Ver o que a cliente escolheu e status do pedido. |
-| A10 | **Financeiro / Pedidos** | Pagamentos recebidos, pendentes, histórico. |
-| A11 | **Configurações da Conta** | Conta Google Drive, Mercado Pago, perfil. |
+| A2 | **Dashboard / Lista de Ensaios** | Ensaios com status e link para a galeria. Vendas e pendências de pagamento consolidadas são planejadas. |
+| A3 | **Novo Ensaio** | Título, cliente, e-mail, senha e prazo de acesso. |
+| A4 | **Detalhe do Ensaio** | Importação do Drive, upload de mídias, grade, configurações (seleção, entrega, prazos), planos de preço, senha, link, seleção da cliente, **status de pagamento** ("Aguardando pagamento" / "Paga", com método e data, e "Marcar como pago") e entrega. Tudo em `/admin/ensaios/[id]`. |
+| A5 | **Marca d'água (Configurações)** | Não existe tela: o texto vem de `WATERMARK_TEXT`. Logo e opacidade são futuros. |
+| A6 | **Conectar Google Drive** | Botão no `/admin` que inicia o OAuth. |
+| A7 | **Financeiro / Pedidos** | Pagamentos recebidos, pendentes, histórico consolidado. _(planejado; por ensaio, o status de pagamento já aparece em A4)_ |
+| A8 | **Configurações da Conta** | Conta Google Drive e perfil. _(parcial; o Mercado Pago é configurado por variáveis de ambiente, sem tela)_ |
 
 ### 🖼️ Área da Cliente
 | # | Tela | Função |
@@ -61,9 +73,9 @@ Fotografa/filma  →   Sobe pro Google Drive           →   Recebe link + senha
 | C3 | **Galeria — aba Vídeos** | Grade de vídeos com marca d'água. |
 | C4 | **Lightbox / Player** | Visualização ampliada com marca d'água + selecionar. |
 | C5 | **Minha Seleção (carrinho)** | Itens escolhidos + escolha de pacote + total. |
-| C6 | **Checkout** | Pix (QR/copia-e-cola) ou cartão. |
-| C7 | **Aguardando Pagamento** | Status do Pix em tempo real. |
-| C8 | **Confirmação & Download** | Arquivos finais sem marca d'água. |
+| C6 | **Checkout** | Página do Mercado Pago (Pix ou cartão), aberta por "Ir para o pagamento". |
+| C7 | **Aguardando Pagamento** | Em `/g/[token]/selecao`: "Pagar agora", "Já paguei, verificar" e "Alterar seleção". |
+| C8 | **Entrega & Download** | Arquivos sem marca d'água, individuais ou em ZIP (`/g/[token]/entrega`). |
 
 ### 🌐 Públicas (opcional/fase 2)
 | # | Tela | Função |
@@ -146,21 +158,20 @@ Fotografa/filma  →   Sobe pro Google Drive           →   Recebe link + senha
 └───────────────────────────────┘
 ```
 
-### C6/C7 — Checkout Pix
+### C7 — Aguardando pagamento
 ```
 ┌───────────────────────────────┐
-│ Pagamento — Pix               │
-│   ┌───────────────┐           │
-│   │  ▓▓ QR CODE ▓▓ │          │
-│   └───────────────┘           │
-│  [ Copiar código Pix ]        │
+│ Seleção enviada               │
+│ ⏳ Aguardando pagamento       │
+│    Total: R$ 330,00           │
 │                               │
-│  ⏳ Aguardando pagamento...   │
-│  (atualiza automaticamente)   │
+│ [ 💳 Pagar agora ]            │
+│ [ 🔄 Já paguei, verificar ]   │
+│ [ ✏️ Alterar seleção ]        │
 └───────────────────────────────┘
 ```
 
-### C8 — Confirmação & Download
+### C8 — Entrega & Download
 ```
 ┌───────────────────────────────┐
 │      ✅ Pagamento aprovado!   │
@@ -175,7 +186,7 @@ Fotografa/filma  →   Sobe pro Google Drive           →   Recebe link + senha
 └───────────────────────────────┘
 ```
 
-### A2 — Dashboard (desktop)
+### A2 — Dashboard (desktop, alvo; hoje só a lista de ensaios)
 ```
 ┌────────────────────────────────────────────────────┐
 │ 📸 Painel        Ensaios  Financeiro  Config   [👤] │
@@ -218,10 +229,11 @@ Fotografa/filma  →   Sobe pro Google Drive           →   Recebe link + senha
 
 | Situação | Comportamento |
 |----------|---------------|
-| Senha errada (cliente) | Mensagem amigável + contador de tentativas / bloqueio temporário. |
+| Senha errada (cliente) | Mensagem amigável; após 5 falhas em 15 min, bloqueio temporário. |
 | Ensaio expirado | Tela informando expiração e contato da fotógrafa. |
 | Processamento incompleto | Galeria mostra só itens prontos; admin vê progresso. |
-| Pix pendente | Tela de espera com atualização automática (polling/realtime). |
-| Pagamento falhou | Opção de tentar de novo / trocar método. |
+| Pagamento pendente | Downloads bloqueados; a cliente pode retomar o checkout, verificar ou alterar a seleção. Sem `notification_url` (dev local), a confirmação vem da sincronização no retorno. |
+| Pagamento recusado ou abandonado | Pedido segue pendente; "Pagar agora" reabre o checkout e "Alterar seleção" cancela o pedido. |
+| Reembolso / chargeback | Downloads bloqueados de novo. |
 | Download expirado | Mensagem + opção de solicitar reenvio à fotógrafa. |
 | Nenhum item selecionado | CTA de pagamento desabilitado com dica. |

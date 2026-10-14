@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { ChevronLeft, Download, CheckCircle2 } from "lucide-react";
-import { getSessionGallery } from "@/lib/clientGallery";
+import { getSessionDownloads, getSessionGallery } from "@/lib/clientGallery";
 import { r2SignedUrl, BUCKET_PRIVATE } from "@/lib/r2";
 
 export default async function EntregaPage({
@@ -10,16 +10,16 @@ export default async function EntregaPage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  const gallery = await getSessionGallery(token);
-  if (!gallery) redirect(`/g/${token}`);
-
-  const finals = gallery.finals ?? [];
-  if (!gallery.downloadReady || finals.length === 0) {
+  const [gallery, finals] = await Promise.all([
+    getSessionGallery(token),
+    getSessionDownloads(token),
+  ]);
+  if (!gallery || !finals) redirect(`/g/${token}`);
+  if (finals.length === 0) {
     redirect(`/g/${token}/galeria`);
   }
   const direct = gallery.deliveryMode === "direct";
 
-  // URLs assinadas do R2 (bucket privado) — geradas no servidor.
   const items = await Promise.all(
     finals.map(async (f) => {
       const [inlineUrl, downloadUrl] = await Promise.all([

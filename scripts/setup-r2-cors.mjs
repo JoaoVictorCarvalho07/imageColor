@@ -1,7 +1,3 @@
-/**
- * Configura CORS no bucket privado do R2 para permitir PUT direto do browser.
- * Executar uma vez: node scripts/setup-r2-cors.mjs
- */
 import { readFileSync } from "fs";
 import { S3Client, PutBucketCorsCommand, GetBucketCorsCommand } from "@aws-sdk/client-s3";
 
@@ -22,15 +18,24 @@ const r2 = new S3Client({
   },
 });
 
+const origins = [
+  ...new Set(
+    [
+      env.APP_URL,
+      ...(env.R2_CORS_EXTRA_ORIGINS ?? "").split(","),
+      "http://localhost:3000",
+      "http://localhost:3001",
+    ]
+      .map((o) => o?.trim().replace(/\/$/, ""))
+      .filter(Boolean),
+  ),
+];
+
 await r2.send(new PutBucketCorsCommand({
   Bucket: "image-color-private",
   CORSConfiguration: {
     CORSRules: [{
-      AllowedOrigins: [
-        "https://imagecolor-nu.vercel.app",
-        "http://localhost:3000",
-        "http://localhost:3001",
-      ],
+      AllowedOrigins: origins,
       AllowedMethods: ["PUT"],
       AllowedHeaders: ["content-type", "*"],
       ExposeHeaders: ["ETag"],
@@ -39,7 +44,6 @@ await r2.send(new PutBucketCorsCommand({
   },
 }));
 
-// Verifica
 const { CORSRules } = await r2.send(new GetBucketCorsCommand({ Bucket: "image-color-private" }));
 console.log("✅ CORS configurado em image-color-private:");
 CORSRules?.forEach(r => {

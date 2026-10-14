@@ -1,13 +1,3 @@
-/**
- * Checagem OTIMISTA do cookie de admin — sem dependências, roda no Edge.
- *
- * ATENÇÃO: isto NÃO valida a assinatura do JWT (o middleware não tem a chave
- * do PocketBase). Serve só para redirecionar quem claramente não está logado,
- * evitando um round-trip. A verificação de verdade é `requireAdmin()` em
- * `lib/pb/session.ts`, que bate no PocketBase — e é ela que protege os dados.
- * Nunca use esta função como única barreira antes de ler ou escrever algo.
- */
-
 export const ADMIN_COOKIE = "pb_admin";
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -22,7 +12,6 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
   }
 }
 
-/** true se existe um cookie com um JWT ainda dentro da validade. */
 export function looksLoggedIn(cookieValue: string | undefined): boolean {
   if (!cookieValue) return false;
   try {

@@ -1,8 +1,9 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { X, Gift, Check } from "lucide-react";
 import { formatBRL } from "@/lib/format";
-import type { PricingPlan } from "@/lib/types";
+import type { MediaType, PricingPlan } from "@/lib/types";
 
 const KIND_LABEL: Record<PricingPlan["kind"], string> = {
   single: "Avulso",
@@ -12,17 +13,33 @@ const KIND_LABEL: Record<PricingPlan["kind"], string> = {
 
 export function PackagesModal({
   plans,
-  contractedPlanId,
+  contracted,
+  locked,
   onContract,
   onClose,
 }: {
   plans: PricingPlan[];
-  contractedPlanId: string | null;
-  onContract: (plan: PricingPlan | null) => void;
+  contracted: Record<MediaType, string | null>;
+  locked: boolean;
+  onContract: (mediaType: MediaType, plan: PricingPlan | null) => void;
   onClose: () => void;
 }) {
   const photoPlans = plans.filter((p) => p.mediaType === "photo");
   const videoPlans = plans.filter((p) => p.mediaType === "video");
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      previous?.focus();
+    };
+  }, [onClose]);
 
   return (
     <div
@@ -30,14 +47,22 @@ export function PackagesModal({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md rounded-t-2xl bg-card p-5 sm:rounded-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="packages-title"
+        className="safe-bottom max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-card px-5 pt-5 sm:rounded-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="font-display text-xl text-primary">Pacotes disponíveis</h2>
+          <h2 id="packages-title" className="font-display text-xl text-primary">
+            Pacotes disponíveis
+          </h2>
           <button
+            ref={closeRef}
+            type="button"
             onClick={onClose}
-            className="rounded-md p-1 text-muted-foreground hover:text-foreground"
+            aria-label="Fechar"
+            className="rounded-md p-2 text-muted-foreground hover:text-foreground"
           >
             <X className="h-5 w-5" />
           </button>
@@ -47,8 +72,9 @@ export function PackagesModal({
           <PlanGroup
             label="Fotos"
             plans={photoPlans}
-            contractedPlanId={contractedPlanId}
-            onContract={onContract}
+            contractedPlanId={contracted.photo}
+            locked={locked}
+            onContract={(plan) => onContract("photo", plan)}
           />
         )}
 
@@ -57,14 +83,15 @@ export function PackagesModal({
             <PlanGroup
               label="Vídeos"
               plans={videoPlans}
-              contractedPlanId={contractedPlanId}
-              onContract={onContract}
+              contractedPlanId={contracted.video}
+              locked={locked}
+              onContract={(plan) => onContract("video", plan)}
             />
           </div>
         )}
 
-        <p className="mt-4 text-xs text-muted-foreground">
-          O valor do pacote será combinado diretamente com o estúdio.
+        <p className="mt-4 pb-1 text-xs text-muted-foreground">
+          O total é calculado na sua seleção e pago por Pix ou cartão ao confirmar.
         </p>
       </div>
     </div>
@@ -75,11 +102,13 @@ function PlanGroup({
   label,
   plans,
   contractedPlanId,
+  locked,
   onContract,
 }: {
   label: string;
   plans: PricingPlan[];
   contractedPlanId: string | null;
+  locked: boolean;
   onContract: (plan: PricingPlan | null) => void;
 }) {
   return (
@@ -105,8 +134,9 @@ function PlanGroup({
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     {KIND_LABEL[p.kind]}
                     {p.kind === "package" && p.includedQty != null
-                      ? ` · ${p.includedQty} ${label.toLowerCase()} inclusas`
+                      ? ` · ${p.includedQty} ${label.toLowerCase()} ${label === "Fotos" ? "inclusas" : "inclusos"}`
                       : ""}
+                    {p.kind === "single" ? " · por item" : ""}
                     {p.kind === "package" &&
                     p.extraItemCents != null &&
                     p.extraItemCents > 0
@@ -133,15 +163,17 @@ function PlanGroup({
                     <span className="inline-flex items-center gap-1.5 text-sm font-medium text-accent">
                       <Check className="h-4 w-4" /> Pacote adicionado
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => onContract(null)}
-                      className="text-xs text-muted-foreground hover:text-destructive"
-                    >
-                      Remover
-                    </button>
+                    {!locked && (
+                      <button
+                        type="button"
+                        onClick={() => onContract(null)}
+                        className="px-2 py-1 text-xs text-muted-foreground hover:text-destructive"
+                      >
+                        Remover
+                      </button>
+                    )}
                   </div>
-                ) : (
+                ) : locked ? null : (
                   <button
                     type="button"
                     onClick={() => onContract(p)}

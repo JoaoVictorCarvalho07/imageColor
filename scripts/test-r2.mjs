@@ -1,10 +1,3 @@
-/**
- * Testa a conexão com o Cloudflare R2:
- * - upload no bucket público (image-color)
- * - upload no bucket privado (image-color-private)
- * - gera URL assinada do privado
- * Uso: node scripts/test-r2.mjs
- */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
@@ -34,7 +27,6 @@ const TEST_KEY       = `_test/imagecolor-${Date.now()}.txt`;
 const TEST_BODY      = Buffer.from("imageColor R2 test OK");
 
 async function run() {
-  // ── Bucket público ─────────────────────────────────────────────────────
   process.stdout.write(`\n── Bucket público (${BUCKET_PUBLIC}) ──\n`);
   await r2.send(new PutObjectCommand({ Bucket: BUCKET_PUBLIC, Key: TEST_KEY, Body: TEST_BODY, ContentType: "text/plain" }));
   const publicUrl = `${PUBLIC_URL}/${TEST_KEY}`;
@@ -48,7 +40,6 @@ async function run() {
   }
   await r2.send(new DeleteObjectCommand({ Bucket: BUCKET_PUBLIC, Key: TEST_KEY }));
 
-  // ── Bucket privado ─────────────────────────────────────────────────────
   process.stdout.write(`\n── Bucket privado (${BUCKET_PRIVATE}) ──\n`);
   try {
     await r2.send(new PutObjectCommand({ Bucket: BUCKET_PRIVATE, Key: TEST_KEY, Body: TEST_BODY, ContentType: "text/plain" }));

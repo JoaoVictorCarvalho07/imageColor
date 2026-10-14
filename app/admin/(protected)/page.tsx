@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Plus, Images, Clock, FolderOpen, ExternalLink } from "lucide-react";
+import { requireAdmin } from "@/lib/pb/session";
 import { superuserPb } from "@/lib/pb/superuser";
 import { formatDateBR } from "@/lib/format";
 import { DeleteGalleryButton } from "@/components/admin/DeleteGalleryButton";
@@ -24,10 +25,9 @@ const STATUS: Record<
 };
 
 export default async function DashboardPage() {
+  await requireAdmin();
   const pb = await superuserPb();
 
-  // Duas consultas em vez de um join com agregação: as mídias vêm só com o id
-  // da galeria (`fields`), e a contagem é feita aqui.
   const [galleries, mediaRefs] = await Promise.all([
     pb.collection("galleries").getFullList<GalleryRow>({ sort: "-created" }),
     pb

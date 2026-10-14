@@ -1,45 +1,39 @@
-/**
- * Testa o fluxo completo de notificação:
- * - notifySelectionSubmitted (fotógrafa recebe aviso da seleção)
- * - notifyDeliveryPublished  (cliente recebe aviso da entrega)
- *
- * Uso: node scripts/test-notify.mjs
- */
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { createClient } from "@supabase/supabase-js";
+import PocketBase from "pocketbase";
 
-// Carrega .env.local
-const envPath = resolve(process.cwd(), ".env.local");
-const env = Object.fromEntries(
-  readFileSync(envPath, "utf-8")
-    .split("\n")
-    .filter((l) => l && !l.startsWith("#"))
-    .map((l) => l.split("=").map((p) => p.trim()))
-    .filter(([k]) => k)
-    .map(([k, ...v]) => [k, v.join("=")]),
-);
+const {
+  POCKETBASE_URL,
+  POCKETBASE_ADMIN_EMAIL,
+  POCKETBASE_ADMIN_PASSWORD,
+  ADMIN_EMAILS,
+  RESEND_API_KEY,
+} = process.env;
+const FROM = process.env.EMAIL_FROM || "Isabel Pontes <onboarding@resend.dev>";
+const APP_URL = process.env.APP_URL || "http://localhost:3000";
 
-const SUPABASE_URL = env.NEXT_PUBLIC_SUPABASE_URL;
-const SERVICE_KEY = env.SUPABASE_SERVICE_ROLE_KEY;
-const RESEND_KEY = env.RESEND_API_KEY;
-const FROM = env.EMAIL_FROM || "Isabel Pontes <onboarding@resend.dev>";
-const APP_URL = env.APP_URL || "http://localhost:3000";
-
-if (!SUPABASE_URL || !SERVICE_KEY || !RESEND_KEY) {
-  console.error("❌  Variáveis de ambiente faltando no .env.local");
+if (
+  !POCKETBASE_URL ||
+  !POCKETBASE_ADMIN_EMAIL ||
+  !POCKETBASE_ADMIN_PASSWORD ||
+  !RESEND_API_KEY
+) {
+  console.error(
+    "Faltam POCKETBASE_URL, POCKETBASE_ADMIN_EMAIL, POCKETBASE_ADMIN_PASSWORD ou RESEND_API_KEY.\n" +
+      "Rode com: node --env-file=.env.local scripts/test-notify.mjs",
+  );
   process.exit(1);
 }
 
-const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
-  auth: { persistSession: false },
-});
+const pb = new PocketBase(POCKETBASE_URL);
+pb.autoCancellation(false);
+await pb
+  .collection("_superusers")
+  .authWithPassword(POCKETBASE_ADMIN_EMAIL, POCKETBASE_ADMIN_PASSWORD);
 
 async function sendEmail(to, subject, html) {
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${RESEND_KEY}`,
+      Authorization: `Bearer ${RESEND_API_KEY}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ from: FROM, to, subject, html }),
@@ -49,115 +43,72 @@ async function sendEmail(to, subject, html) {
   return body.id;
 }
 
-// ── Teste 1: notifySelectionSubmitted ──────────────────────────────────────
-console.log("\n── Teste 1: notifySelectionSubmitted ──");
+const footer =
+  '<p style="color:#888;font-size:12px">(e-mail de teste, não disparado por ação real)</p>';
 
-// Busca uma sessão real com seleção
-const { data: sess } = await admin
-  .from("gallery_sessions")
-  .select("session_token, gallery_id")
-  .gt("expires_at", new Date().toISOString())
-  .limit(1)
-  .maybeSingle();
+console.log("\nTeste 1: seleção enviada (aviso à fotógrafa)");
 
-if (!sess) {
-  console.log("⚠️  Nenhuma sessão ativa encontrada. Pulando teste 1.");
+const ownerEmail = (ADMIN_EMAILS ?? "").split(",")[0]?.trim();
+
+if (!ownerEmail) {
+  console.log("ADMIN_EMAILS vazio, pulando o teste 1.");
 } else {
-  const { data: g } = await admin
-    .from("galleries")
-    .select("id, title, user_id, client_id")
-    .eq("id", sess.gallery_id)
-    .single();
+  const selections = await pb.collection("selections").getList(1, 1, {
+    filter: "status = 'submitted' || status = 'paid'",
+    sort: "-submitted_at",
+    expand: "gallery",
+  });
+  const selection = selections.items[0];
 
-  const { data: userRes } = await admin.auth.admin.getUserById(g.user_id);
-  const ownerEmail = userRes?.user?.email;
-  console.log(`   Galeria : ${g.title}`);
-  console.log(`   Fotógrafa: ${ownerEmail}`);
-
-  if (!ownerEmail) {
-    console.log("❌  E-mail da fotógrafa não encontrado.");
+  if (!selection) {
+    console.log("Nenhuma seleção enviada encontrada, pulando o teste 1.");
   } else {
-    const { data: sel } = await admin
-      .from("selections")
-      .select("id")
-      .eq("gallery_id", g.id)
-      .eq("session_token", sess.session_token)
-      .maybeSingle();
-    let count = 0;
-    if (sel) {
-      const { count: c } = await admin
-        .from("selection_items")
-        .select("id", { count: "exact", head: true })
-        .eq("selection_id", sel.id);
-      count = c ?? 0;
-    }
-
-    let clientName = null;
-    if (g.client_id) {
-      const { data: cl } = await admin
-        .from("clients")
-        .select("name")
-        .eq("id", g.client_id)
-        .maybeSingle();
-      clientName = cl?.name;
-    }
-
+    const gallery = selection.expand?.gallery;
+    const count = selection.media?.length ?? 0;
+    console.log(`Ensaio: ${gallery?.title}`);
+    console.log(`Fotógrafa: ${ownerEmail}`);
     try {
       const id = await sendEmail(
         ownerEmail,
-        `[TESTE] Seleção recebida — ${g.title}`,
-        `<p>${clientName ?? "A cliente"} confirmou a seleção do ensaio <strong>${g.title}</strong>.</p>
+        `[TESTE] Seleção recebida — ${gallery?.title}`,
+        `<p>${gallery?.client_name || "A cliente"} confirmou a seleção do ensaio <strong>${gallery?.title}</strong>.</p>
          <p><strong>${count}</strong> foto(s) selecionada(s).</p>
-         <p><a href="${APP_URL}/admin/ensaios/${g.id}">Abrir no painel</a></p>
-         <p style="color:#888;font-size:12px">(e-mail de teste — não disparado por ação real)</p>`,
+         <p><a href="${APP_URL}/admin/ensaios/${gallery?.id}">Abrir no painel</a></p>
+         ${footer}`,
       );
-      console.log(`✅  Enviado para ${ownerEmail} · ID: ${id}`);
+      console.log(`Enviado para ${ownerEmail} (id ${id})`);
     } catch (e) {
-      console.error("❌  Erro:", e.message);
+      console.error("Erro:", e.message);
     }
   }
 }
 
-// ── Teste 2: notifyDeliveryPublished ──────────────────────────────────────
-console.log("\n── Teste 2: notifyDeliveryPublished ──");
+console.log("\nTeste 2: entrega publicada (aviso à cliente)");
 
-// Busca uma galeria com cliente que tem e-mail cadastrado
-const { data: galleries } = await admin
-  .from("galleries")
-  .select("id, title, access_token, client_id");
+const galleries = await pb.collection("galleries").getList(1, 1, {
+  filter: "client_email != ''",
+  sort: "-created",
+});
+const gallery = galleries.items[0];
 
-let found = false;
-for (const g of galleries ?? []) {
-  if (!g.client_id) continue;
-  const { data: cl } = await admin
-    .from("clients")
-    .select("name, email")
-    .eq("id", g.client_id)
-    .maybeSingle();
-  if (!cl?.email) continue;
-
-  console.log(`   Galeria : ${g.title}`);
-  console.log(`   Cliente  : ${cl.name} <${cl.email}>`);
-
+if (!gallery) {
+  console.log("Nenhum ensaio com e-mail da cliente, pulando o teste 2.");
+  console.log("Cadastre o e-mail da cliente ao criar o ensaio no painel.");
+} else {
+  console.log(`Ensaio: ${gallery.title}`);
+  console.log(`Cliente: ${gallery.client_name} <${gallery.client_email}>`);
   try {
     const id = await sendEmail(
-      cl.email,
-      `[TESTE] Suas fotos estão prontas — ${g.title}`,
-      `<p>Olá ${cl.name ?? ""}! Suas fotos do ensaio <strong>${g.title}</strong> já estão prontas. 🎉</p>
-       <p><a href="${APP_URL}/g/${g.access_token}">Acessar e baixar</a></p>
-       <p style="color:#888;font-size:12px">(e-mail de teste — não disparado por ação real)</p>`,
+      gallery.client_email,
+      `[TESTE] Suas fotos estão prontas — ${gallery.title}`,
+      `<p>Olá ${gallery.client_name || ""}! Suas fotos do ensaio <strong>${gallery.title}</strong> já estão prontas.</p>
+       <p><a href="${APP_URL}/g/${gallery.access_token}">Acessar e baixar</a></p>
+       ${footer}`,
     );
-    console.log(`✅  Enviado para ${cl.email} · ID: ${id}`);
+    console.log(`Enviado para ${gallery.client_email} (id ${id})`);
   } catch (e) {
-    console.error("❌  Erro:", e.message);
+    console.error("Erro:", e.message);
   }
-  found = true;
-  break;
-}
-
-if (!found) {
-  console.log("⚠️  Nenhuma cliente com e-mail cadastrado. Pulando teste 2.");
-  console.log("   → Para testar: cadastre uma cliente com e-mail no painel admin.");
 }
 
 console.log("\nPronto.\n");

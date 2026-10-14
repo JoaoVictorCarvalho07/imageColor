@@ -2,7 +2,7 @@ import Link from "next/link";
 
 export default function Home() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center px-6 text-center">
+    <main className="flex min-h-dvh flex-col items-center justify-center px-6 text-center">
       <p className="label-caps">Isabel Pontes · Fotografia</p>
       <h1 className="mt-5 font-display text-5xl font-light leading-tight text-primary">
         Sua galeria,
@@ -19,12 +19,12 @@ export default function Home() {
           href="/admin"
           className="rounded-md bg-accent px-7 py-3 text-sm uppercase tracking-wide text-accent-foreground transition-colors hover:opacity-90"
         >
-          Logar{" "}
+          Entrar
         </Link>
         <span className="text-xs text-muted-foreground">
-          Para cliente peça o link unico
+          Para clientes, peça o link único do seu ensaio
         </span>
       </div>
-    </main> 
+    </main>
   );
 }
