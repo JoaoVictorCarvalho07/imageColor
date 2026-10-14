@@ -1,0 +1,10 @@
+{
+  "redirects": [
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "imagecolor-nu.vercel.app" }],
+      "destination": "https://galeria.isabelpontes.com.br/:path*",
+      "permanent": false
+    }
+  ]
+}
