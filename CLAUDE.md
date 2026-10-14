@@ -73,6 +73,21 @@ pnpm typecheck
 - **Pagamento aprovado vence.** Se a cliente pagar um pedido antigo depois de alterar a seleção,
   a seleção volta ao que foi pago (snapshot do pedido). Estorno ou chargeback volta a bloquear.
 
+## Deploy
+
+- **VM Oracle (Ubuntu ARM, `ssh oracle`)**, saindo da Vercel. Caddy (systemd) faz HTTPS e proxy;
+  PocketBase roda no systemd em `image-color.isabelpontes.com.br`; a galeria roda em Docker.
+- `deploy/vm/subir.sh <ref>` na VM: clona/atualiza `~/apps/galeria/src`, builda dentro de `node:22`
+  (os binários de `sharp` e `ffmpeg` precisam ser ARM, então o build é na própria VM), copia o
+  `output: "standalone"` para `~/apps/galeria/versoes/<data>-<commit>` e sobe o container `galeria`
+  (`node:22-slim`, `127.0.0.1:8083`). Healthcheck antes de trocar; se falhar, volta a versão
+  anterior. Guarda as 3 últimas versões. Mesmo padrão do `site-next` na mesma VM.
+- Segredos em `~/apps/galeria/.env` (chmod 600, sem aspas). Não colocar `NODE_ENV` nele: o build
+  usaria `pnpm install` sem devDependencies.
+- Bloco do Caddy em `deploy/vm/Caddyfile.galeria`, com `flush_interval -1` para o ZIP e o NDJSON do
+  Drive saírem em stream. O Caddy sobrescreve `X-Forwarded-For` (não confia em proxies), então o IP
+  do limite de tentativas não é forjável.
+
 ## Estrutura
 
 - `app/admin` painel · `app/g/[token]` galeria da cliente · `app/api` rotas

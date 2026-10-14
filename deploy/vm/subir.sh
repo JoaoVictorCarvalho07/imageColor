@@ -23,7 +23,7 @@ echo "build de $REF ($COMMIT)"
 docker run --rm \
   --user "$(id -u):$(id -g)" \
   -e HOME=/tmp -e COREPACK_HOME=/tmp/corepack -e NEXT_TELEMETRY_DISABLED=1 \
-  --env-file "$RAIZ/.env" -e NODE_ENV=production \
+  --env-file "$RAIZ/.env" \
   -v "$RAIZ/src:/src" -w /src \
   node:22 bash -c "corepack $PNPM install --frozen-lockfile && corepack $PNPM build"
 
@@ -49,7 +49,7 @@ rodar() {
 
 no_ar() {
   for _ in $(seq 1 40); do
-    if curl -fsS -o /dev/null "http://127.0.0.1:$PORTA/"; then return 0; fi
+    if curl -fsS -o /dev/null "http://127.0.0.1:$PORTA/" 2>/dev/null; then return 0; fi
     sleep 1
   done
   return 1
