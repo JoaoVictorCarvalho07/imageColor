@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: "standalone",
   serverExternalPackages: ["sharp", "archiver", "ffmpeg-static"],
   outputFileTracingIncludes: {
     "/api/admin/ensaios/[id]/upload": [
