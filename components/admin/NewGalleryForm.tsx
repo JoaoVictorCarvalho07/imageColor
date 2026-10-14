@@ -40,15 +40,19 @@ export function NewGalleryForm() {
         <input
           name="clientEmail"
           type="email"
+          autoComplete="off"
           placeholder="marina@email.com"
           className="w-full rounded-md border border-border bg-card px-3 py-2.5 text-foreground outline-none focus:border-accent"
         />
       </Field>
 
-      <div className="grid grid-cols-2 gap-4">
-        <Field label="Senha de acesso" hint="Em branco = gerada">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Field label="Senha de acesso" hint="Mín. 6 caracteres">
           <input
             name="password"
+            required
+            minLength={6}
+            autoComplete="off"
             placeholder="ex.: 123456"
             className="w-full rounded-md border border-border bg-card px-3 py-2.5 text-foreground outline-none focus:border-accent"
           />
@@ -64,12 +68,16 @@ export function NewGalleryForm() {
         </Field>
       </div>
 
-      {state.error && <p className="text-sm text-destructive">{state.error}</p>}
+      {state.error && (
+        <p role="alert" className="text-sm text-destructive">
+          {state.error}
+        </p>
+      )}
 
       <button
         type="submit"
         disabled={pending}
-        className="rounded-md bg-accent px-6 py-2.5 text-sm uppercase tracking-wide text-accent-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
+        className="min-h-11 rounded-md bg-accent px-6 py-2.5 text-sm uppercase tracking-wide text-accent-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
       >
         {pending ? "Criando…" : "Criar ensaio"}
       </button>
@@ -88,7 +96,7 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="mb-1.5 flex items-baseline gap-2">
+      <span className="mb-1.5 flex flex-wrap items-baseline gap-x-2">
         <span className="text-sm font-medium text-primary">{label}</span>
         {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
       </span>

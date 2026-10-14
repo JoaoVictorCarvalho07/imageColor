@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { ChevronLeft } from "lucide-react";
+import { requireAdmin } from "@/lib/pb/session";
 import { NewGalleryForm } from "@/components/admin/NewGalleryForm";
 
-export default function NovoEnsaioPage() {
+export default async function NovoEnsaioPage() {
+  await requireAdmin();
   return (
     <div>
       <Link

@@ -3,7 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { getAdminUser } from "@/lib/pb/session";
 import { superuserPb } from "@/lib/pb/superuser";
-import { setGalleryPassword } from "@/lib/pb/gallery";
+import { MIN_PASSWORD, setGalleryPassword } from "@/lib/pb/gallery";
+import { markSelectionPaid, reopenSelection } from "@/lib/pb/orders";
+import { parseBRLToCents } from "@/lib/format";
 import { notifyDeliveryPublished } from "@/lib/notifications";
 
 export interface ActionState {
@@ -38,18 +40,18 @@ export async function updateGalleryAction(
   const selectionLimit =
     selectionMode === "quota" && limitRaw ? parseInt(limitRaw, 10) : null;
   const extraPhotoCents =
-    selectionMode === "quota" && extraRaw
-      ? Math.round((parseFloat(extraRaw.replace(",", ".")) || 0) * 100)
-      : null;
+    selectionMode === "quota" && extraRaw ? parseBRLToCents(extraRaw) : null;
 
   if (!title) return { error: "O título é obrigatório." };
+  if (selectionMode === "quota" && (selectionLimit === null || !(selectionLimit >= 0))) {
+    return { error: "Informe quantas fotos estão inclusas na cota." };
+  }
 
   try {
     const pb = await superuserPb();
     await pb.collection("galleries").update(galleryId, {
       title,
       status,
-      // PocketBase limpa campo de data com string vazia, não com null.
       access_expires_at: accessExpiresAt
         ? new Date(`${accessExpiresAt}T23:59:59`).toISOString()
         : "",
@@ -73,13 +75,11 @@ export async function setPasswordAction(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  // O original não checava sessão aqui — qualquer um podia trocar a senha
-  // de um ensaio sabendo o id.
   if (!(await getAdminUser())) return SESSION_EXPIRED;
 
   const password = String(formData.get("password") ?? "").trim();
-  if (password.length < 4) {
-    return { error: "A senha deve ter ao menos 4 caracteres." };
+  if (password.length < MIN_PASSWORD) {
+    return { error: `A senha deve ter ao menos ${MIN_PASSWORD} caracteres.` };
   }
   return setGalleryPassword(galleryId, password);
 }
@@ -105,6 +105,7 @@ export async function setDeliveryPublishedAction(
 }
 
 export interface PlanInput {
+  id: string | null;
   mediaType: "photo" | "video";
   kind: "single" | "package" | "full";
   name: string;
@@ -116,24 +117,29 @@ export interface PlanInput {
 export async function savePlansAction(
   galleryId: string,
   plans: PlanInput[],
-): Promise<ActionState> {
+): Promise<ActionState & { ids?: string[] }> {
   if (!(await getAdminUser())) return SESSION_EXPIRED;
+
+  const invalid = plans.find(
+    (p) =>
+      p.priceCents < 0 ||
+      (p.kind === "package" && !(p.includedQty && p.includedQty > 0)),
+  );
+  if (invalid) {
+    return { error: `Revise o plano "${invalid.name}": pacote precisa de quantidade inclusa.` };
+  }
 
   try {
     const pb = await superuserPb();
-
-    // Substitui o conjunto inteiro de planos da galeria. `contracted_plan` nas
-    // seleções não tem cascade, então uma seleção existente só perde a
-    // referência ao pacote — as fotos escolhidas ficam intactas.
     const current = await pb.collection("pricing_plans").getFullList<{ id: string }>({
       filter: pb.filter("gallery = {:g}", { g: galleryId }),
+      fields: "id",
     });
-    await Promise.all(
-      current.map((p) => pb.collection("pricing_plans").delete(p.id)),
-    );
+    const currentIds = new Set(current.map((p) => p.id));
+    const keep: string[] = [];
 
     for (const p of plans) {
-      await pb.collection("pricing_plans").create({
+      const data = {
         gallery: galleryId,
         media_type: p.mediaType,
         kind: p.kind,
@@ -141,12 +147,50 @@ export async function savePlansAction(
         included_qty: p.includedQty,
         price_cents: p.priceCents,
         extra_item_cents: p.extraItemCents,
-      });
+      };
+      if (p.id && currentIds.has(p.id)) {
+        await pb.collection("pricing_plans").update(p.id, data);
+        keep.push(p.id);
+      } else {
+        const created = await pb.collection("pricing_plans").create<{ id: string }>(data);
+        keep.push(created.id);
+      }
     }
-  } catch (err) {
-    return { error: err instanceof Error ? err.message : "Erro ao salvar preços." };
-  }
 
+    for (const id of currentIds) {
+      if (!keep.includes(id)) await pb.collection("pricing_plans").delete(id);
+    }
+
+    revalidatePath(`/admin/ensaios/${galleryId}`);
+    return { ok: true, ids: keep };
+  } catch (err) {
+    console.error("[plans] save failed:", err);
+    return { error: "Erro ao salvar preços." };
+  }
+}
+
+export async function reopenSelectionAction(galleryId: string): Promise<ActionState> {
+  if (!(await getAdminUser())) return SESSION_EXPIRED;
+  try {
+    const res = await reopenSelection(galleryId);
+    if (res.error) return res;
+  } catch (err) {
+    console.error("[selection] reopen failed:", err);
+    return { error: "Erro ao reabrir a seleção." };
+  }
+  revalidatePath(`/admin/ensaios/${galleryId}`);
+  return { ok: true };
+}
+
+export async function markPaidAction(galleryId: string): Promise<ActionState> {
+  if (!(await getAdminUser())) return SESSION_EXPIRED;
+  try {
+    const res = await markSelectionPaid(galleryId);
+    if (res.error) return res;
+  } catch (err) {
+    console.error("[selection] mark paid failed:", err);
+    return { error: "Erro ao marcar como pago." };
+  }
   revalidatePath(`/admin/ensaios/${galleryId}`);
   return { ok: true };
 }

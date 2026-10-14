@@ -5,13 +5,16 @@ import { useRouter } from "next/navigation";
 import { Link2, FolderInput, CheckCircle2, Loader2 } from "lucide-react";
 
 interface ImportEvent {
-  type: "start" | "item" | "done" | "error";
+  type: "start" | "item" | "failed" | "done" | "error";
   total?: number;
   index?: number;
   thumbUrl?: string | null;
   imported?: number;
   skipped?: number;
   found?: number;
+  failed?: number;
+  remaining?: number;
+  name?: string;
   message?: string;
 }
 
@@ -33,6 +36,7 @@ export function DriveImport({
   const [done, setDone] = useState(0);
   const [thumbs, setThumbs] = useState<string[]>([]);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [failedItems, setFailedItems] = useState<string[]>([]);
 
   if (!connected) {
     return (
@@ -54,6 +58,7 @@ export function DriveImport({
     setBusy(true);
     setMsg(null);
     setThumbs([]);
+    setFailedItems([]);
     setTotal(0);
     setDone(0);
 
@@ -81,6 +86,8 @@ export function DriveImport({
       let imported = 0;
       let skipped = 0;
       let found = 0;
+      let failed = 0;
+      let remaining = 0;
       let hadError = false;
 
       while (true) {
@@ -103,8 +110,12 @@ export function DriveImport({
           } else if (evt.type === "item") {
             setDone(evt.index ?? 0);
             if (evt.thumbUrl) setThumbs((t) => [...t, evt.thumbUrl as string]);
+          } else if (evt.type === "failed") {
+            setFailedItems((l) => [...l, `${evt.name}: ${evt.message}`]);
           } else if (evt.type === "done") {
             imported = evt.imported ?? 0;
+            failed = evt.failed ?? 0;
+            remaining = evt.remaining ?? 0;
             skipped = evt.skipped ?? 0;
             found = evt.found ?? 0;
           } else if (evt.type === "error") {
@@ -115,9 +126,18 @@ export function DriveImport({
       }
 
       if (!hadError) {
+        const summary = `${imported} importada(s) · ${skipped} já existiam · ${found} na pasta.`;
+        const extras = [
+          failed > 0
+            ? `${failed} falhou(aram) — clique em Importar para tentar de novo.`
+            : "",
+          remaining > 0
+            ? `Tempo esgotado: restam ${remaining} foto(s). Clique em Importar novamente para continuar.`
+            : "",
+        ].filter(Boolean);
         setMsg({
-          ok: true,
-          text: `${imported} importada(s) · ${skipped} já existiam · ${found} na pasta.`,
+          ok: extras.length === 0,
+          text: [summary, ...extras].join(" "),
         });
       }
       router.refresh();
@@ -187,6 +207,14 @@ export function DriveImport({
             />
           ))}
         </div>
+      )}
+
+      {failedItems.length > 0 && (
+        <ul className="mt-2 space-y-0.5 text-xs text-destructive">
+          {failedItems.map((f, i) => (
+            <li key={i}>{f}</li>
+          ))}
+        </ul>
       )}
 
       {msg && (

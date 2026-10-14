@@ -1,3 +1,4 @@
+import "server-only";
 import sharp from "sharp";
 
 export interface WatermarkOptions {
@@ -6,13 +7,13 @@ export interface WatermarkOptions {
 }
 
 export interface ProcessedImage {
-  preview: Buffer; // webp ~1600px, com marca d'água
-  thumb: Buffer; // webp ~400px, com marca d'água
-  width: number; // dimensões do preview
+  preview: Buffer;
+  thumb: Buffer;
+  width: number;
   height: number;
 }
 
-function escapeXml(s: string): string {
+export function escapeXml(s: string): string {
   return s.replace(
     /[<>&'"]/g,
     (c) =>
@@ -29,7 +30,6 @@ function watermarkSvg(
   opacity: number,
 ): Buffer {
   const safe = escapeXml(text);
-  // Padrão diagonal repetido — difícil de remover (cobre a imagem toda).
   return Buffer.from(
     `<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg">
       <defs>
@@ -50,7 +50,7 @@ async function variant(
   quality: number,
 ): Promise<{ buf: Buffer; width: number; height: number }> {
   const resized = await sharp(input)
-    .rotate() // respeita orientação EXIF
+    .rotate()
     .resize({ width: maxPx, height: maxPx, fit: "inside", withoutEnlargement: true })
     .toBuffer({ resolveWithObject: true });
   const { width, height } = resized.info;
@@ -61,7 +61,6 @@ async function variant(
   return { buf, width: width ?? maxPx, height: height ?? maxPx };
 }
 
-/** Gera preview e thumbnail com marca d'água a partir do buffer original. */
 export async function processImage(
   input: Buffer,
   opts: WatermarkOptions = {},

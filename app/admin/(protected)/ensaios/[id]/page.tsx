@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ChevronLeft, Image as ImageIcon, Film, Users } from "lucide-react";
+import { requireAdmin } from "@/lib/pb/session";
 import { superuserPb } from "@/lib/pb/superuser";
-import { formatDateBR } from "@/lib/format";
+import { formatBRL, formatDateBR } from "@/lib/format";
 import { CopyLink } from "@/components/admin/CopyLink";
 import { SetPasswordForm } from "@/components/admin/SetPasswordForm";
 import { GallerySettingsForm } from "@/components/admin/GallerySettingsForm";
@@ -10,6 +11,10 @@ import { PricingEditor, type PlanRow } from "@/components/admin/PricingEditor";
 import { MediaUploader } from "@/components/admin/MediaUploader";
 import { DriveImport } from "@/components/admin/DriveImport";
 import { SelectionFilenames } from "@/components/admin/SelectionFilenames";
+import { ConfirmActionButton } from "@/components/admin/ConfirmActionButton";
+import { markPaidAction, reopenSelectionAction } from "@/lib/galleryAdminActions";
+import { quoteSelection } from "@/lib/pricing";
+import type { PricingPlan } from "@/lib/types";
 import { DeliveryManager } from "@/components/admin/DeliveryManager";
 import { MediaGrid } from "@/components/admin/MediaGrid";
 import { DeleteGalleryButton } from "@/components/admin/DeleteGalleryButton";
@@ -38,11 +43,20 @@ const STATUS: Record<string, { label: string; bg: string; fg: string }> = {
   },
 };
 
+const PAYMENT_METHOD: Record<string, string> = {
+  bank_transfer: "Pix",
+  credit_card: "Cartão de crédito",
+  debit_card: "Cartão de débito",
+  account_money: "Saldo Mercado Pago",
+  manual: "Marcado manualmente",
+};
+
 export default async function EnsaioDetailPage({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requireAdmin();
   const { id } = await params;
   const pb = await superuserPb();
 
@@ -68,6 +82,7 @@ export default async function EnsaioDetailPage({
     position: number;
   };
   type PlanRecord = {
+    id: string;
     media_type: "photo" | "video";
     kind: "single" | "package" | "full";
     name: string;
@@ -80,7 +95,17 @@ export default async function EnsaioDetailPage({
     status: string;
     created: string;
     submitted_at: string;
+    contracted_plan: string;
+    video_plan: string;
+    amount_cents: number | null;
     expand?: { media?: { filename: string; type: string }[] };
+  };
+  type OrderRow = {
+    status: string;
+    amount_cents: number;
+    payment_method: string;
+    payment_status: string;
+    paid_at: string;
   };
 
   const gallery = await pb
@@ -91,7 +116,7 @@ export default async function EnsaioDetailPage({
 
   const byGallery = pb.filter("gallery = {:g}", { g: id });
 
-  const [plans, media, selections, driveConns, finals] = await Promise.all([
+  const [plans, media, selections, driveConns, finals, orders] = await Promise.all([
     pb.collection("pricing_plans").getFullList<PlanRecord>({
       filter: byGallery,
       sort: "created",
@@ -101,8 +126,6 @@ export default async function EnsaioDetailPage({
       sort: "position",
       fields: "id,type,thumb_key,status,position",
     }),
-    // `expand: media` traz os itens escolhidos — o que antes era o join com
-    // selection_items.
     pb.collection("selections").getFullList<SelectionRow>({
       filter: byGallery,
       sort: "-created",
@@ -115,7 +138,19 @@ export default async function EnsaioDetailPage({
       filter: byGallery,
       sort: "created",
     }),
+    pb
+      .collection("orders")
+      .getList<OrderRow>(1, 1, {
+        filter: pb.filter("gallery = {:g} && status = 'paid'", { g: id }),
+        sort: "-paid_at",
+      })
+      .then((r) => r.items)
+      .catch(() => [] as OrderRow[]),
   ]);
+  const paidOrder = orders[0] ?? null;
+  const awaitingPayment = selections.some(
+    (sel) => sel.status !== "paid" && (sel.amount_cents ?? 0) > 0,
+  );
 
   const driveConn = driveConns[0] ?? null;
   const finalRows = finals as { filename: string | null }[];
@@ -128,15 +163,33 @@ export default async function EnsaioDetailPage({
   const videos = mediaRows.filter((m) => m.type === "video").length;
 
   const selectionRows = selections;
+  const pricingPlans: PricingPlan[] = plans.map((p) => ({
+    id: p.id,
+    mediaType: p.media_type,
+    kind: p.kind,
+    name: p.name,
+    includedQty: p.included_qty ?? undefined,
+    priceCents: p.price_cents,
+    extraItemCents: p.extra_item_cents ?? undefined,
+  }));
+  const pricingContext = {
+    selectionMode: gallery.selection_mode ?? "free",
+    selectionLimit: gallery.selection_limit,
+    extraPhotoCents: gallery.extra_photo_cents,
+    plans: pricingPlans,
+  };
 
   const planRows: PlanRow[] = (plans ?? []).map((p) => ({
+    id: p.id,
     mediaType: p.media_type,
     kind: p.kind,
     name: p.name,
     includedQty: p.included_qty != null ? String(p.included_qty) : "",
-    price: (p.price_cents / 100).toFixed(2),
+    price: (p.price_cents / 100).toFixed(2).replace(".", ","),
     extraItem:
-      p.extra_item_cents != null ? (p.extra_item_cents / 100).toFixed(2) : "",
+      p.extra_item_cents != null
+        ? (p.extra_item_cents / 100).toFixed(2).replace(".", ",")
+        : "",
   }));
 
   const s = STATUS[gallery.status] ?? STATUS.draft;
@@ -164,7 +217,6 @@ export default async function EnsaioDetailPage({
         </div>
       </div>
 
-      {/* Compartilhar */}
       <Section title="Compartilhar com a cliente">
         <p className="mb-2 text-sm text-muted-foreground">Link do ensaio</p>
         <CopyLink path={`/g/${gallery.access_token}`} />
@@ -175,7 +227,6 @@ export default async function EnsaioDetailPage({
         <SetPasswordForm galleryId={gallery.id} />
       </Section>
 
-      {/* Resumo */}
       <Section title="Resumo">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <Stat
@@ -200,7 +251,6 @@ export default async function EnsaioDetailPage({
         </div>
       </Section>
 
-      {/* Mídias */}
       <Section title="Mídias">
         <DriveImport
           galleryId={gallery.id}
@@ -219,7 +269,6 @@ export default async function EnsaioDetailPage({
         </p>
       </Section>
 
-      {/* Configurações */}
       <Section title="Configurações">
         <GallerySettingsForm
           gallery={{
@@ -238,12 +287,10 @@ export default async function EnsaioDetailPage({
         />
       </Section>
 
-      {/* Preços */}
       <Section title="Preços e pacotes">
         <PricingEditor galleryId={gallery.id} initial={planRows} />
       </Section>
 
-      {/* Seleções */}
       <Section title="Seleções da cliente">
         {selectionRows.length === 0 ? (
           <p className="text-sm text-muted-foreground">
@@ -255,12 +302,28 @@ export default async function EnsaioDetailPage({
             {selectionRows.map((sel) => {
               const items = sel.expand?.media ?? [];
               const names = items.map((m) => m.filename || "(sem nome)");
+              const photoCount = items.filter((m) => m.type === "photo").length;
+              const videoCount = items.length - photoCount;
+              const quote = quoteSelection(pricingContext, {
+                photoCount,
+                videoCount,
+                photoPlanId: sel.contracted_plan || null,
+                videoPlanId: sel.video_plan || null,
+              });
+              const planNames = [quote.photos.plan, sel.video_plan ? quote.videos.plan : null]
+                .filter((p) => p !== null)
+                .map((p) => p.name);
+              const committed = sel.status !== "open" ? (sel.amount_cents ?? 0) : null;
+              const totalCents = committed ?? quote.totalCents;
+              const unpaid = sel.status === "submitted" && totalCents > 0;
               const statusLabel =
-                sel.status === "submitted"
-                  ? "Enviada"
-                  : sel.status === "paid"
-                    ? "Paga"
-                    : "Em andamento";
+                sel.status === "paid"
+                  ? "Paga"
+                  : unpaid
+                    ? "Aguardando pagamento"
+                    : sel.status === "submitted"
+                      ? "Enviada"
+                      : "Em andamento";
               const when = sel.submitted_at || sel.created;
               return (
                 <li
@@ -269,20 +332,27 @@ export default async function EnsaioDetailPage({
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-sm text-primary">
-                      {items.length} foto(s) selecionada(s)
+                      {photoCount} foto(s)
+                      {videoCount > 0 && ` e ${videoCount} vídeo(s)`}
+                      {planNames.length > 0 && ` · ${planNames.join(" + ")}`}
+                      {totalCents > 0 && ` · ${formatBRL(totalCents)}`}
                     </span>
                     <span className="flex items-center gap-2 text-xs text-muted-foreground">
                       <span
                         className="rounded-full px-2 py-0.5"
                         style={{
                           background:
-                            sel.status === "submitted"
-                              ? "hsl(var(--accent))"
-                              : "hsl(var(--muted))",
+                            sel.status === "open"
+                              ? "hsl(var(--muted))"
+                              : unpaid
+                                ? "hsl(var(--gold))"
+                                : "hsl(var(--accent))",
                           color:
-                            sel.status === "submitted"
-                              ? "hsl(var(--accent-foreground))"
-                              : "hsl(var(--muted-foreground))",
+                            sel.status === "open"
+                              ? "hsl(var(--muted-foreground))"
+                              : unpaid
+                                ? "hsl(var(--primary))"
+                                : "hsl(var(--accent-foreground))",
                         }}
                       >
                         {statusLabel}
@@ -290,6 +360,32 @@ export default async function EnsaioDetailPage({
                       {new Date(when).toLocaleString("pt-BR")}
                     </span>
                   </div>
+                  {sel.status === "paid" && paidOrder && (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {formatBRL(paidOrder.amount_cents)} ·{" "}
+                      {PAYMENT_METHOD[paidOrder.payment_method] ?? "Mercado Pago"}
+                      {paidOrder.paid_at &&
+                        ` · ${new Date(paidOrder.paid_at).toLocaleString("pt-BR")}`}
+                    </p>
+                  )}
+                  {sel.status === "submitted" && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <ConfirmActionButton
+                        icon="reopen"
+                        label="Reabrir seleção"
+                        prompt="A cliente poderá alterar e reenviar."
+                        action={reopenSelectionAction.bind(null, gallery.id)}
+                      />
+                      {unpaid && (
+                        <ConfirmActionButton
+                          icon="paid"
+                          label="Marcar como pago"
+                          prompt="Use se a cliente pagou fora do Mercado Pago."
+                          action={markPaidAction.bind(null, gallery.id)}
+                        />
+                      )}
+                    </div>
+                  )}
                   <SelectionFilenames names={names} />
                 </li>
               );
@@ -298,13 +394,18 @@ export default async function EnsaioDetailPage({
         )}
       </Section>
 
-      {/* Entrega */}
       <Section title="Entrega (fotos finais)">
+        {awaitingPayment && (
+          <p className="mb-3 rounded-md border border-border bg-secondary px-3 py-2 text-sm text-primary">
+            A cliente ainda não pagou. Os downloads ficam bloqueados até o pagamento ser
+            confirmado.
+          </p>
+        )}
         {(gallery.delivery_mode ?? "edit") === "direct" ? (
           <p className="text-sm text-muted-foreground">
             Este ensaio está em <strong>download direto</strong>: assim que a
-            cliente confirma a seleção, ela baixa na hora os originais das fotos
-            escolhidas (em alta, sem marca d&apos;água). Não é preciso publicar
+            cliente paga (ou confirma, quando não há valor a pagar), ela baixa na
+            hora os originais das fotos escolhidas (em alta, sem marca d&apos;água). Não é preciso publicar
             uma entrega aqui. Para editar e entregar você mesma, troque o{" "}
             <em>Destino da seleção</em> em Configurações para “Edição”.
           </p>

@@ -9,7 +9,6 @@ export interface SendEmailOpts {
   html: string;
 }
 
-/** Envia e-mail via Resend. Sem RESEND_API_KEY, apenas registra (no-op). */
 export async function sendEmail(
   opts: SendEmailOpts,
 ): Promise<{ ok?: boolean; skipped?: boolean; error?: string }> {

@@ -1,7 +1,13 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // sharp usa binário nativo — não deve ser empacotado pelo bundler.
+  output: "standalone",
   serverExternalPackages: ["sharp", "archiver", "ffmpeg-static"],
+  outputFileTracingIncludes: {
+    "/api/admin/ensaios/[id]/upload": [
+      "./node_modules/ffmpeg-static/**/*",
+      "./node_modules/.pnpm/ffmpeg-static@*/node_modules/ffmpeg-static/**/*",
+    ],
+  },
   images: {
     remotePatterns: [
       {

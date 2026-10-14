@@ -3,19 +3,15 @@ import { getAdminUser } from "@/lib/pb/session";
 import { superuserPb } from "@/lib/pb/superuser";
 import { newObjectId, keysFor } from "@/lib/mediaPipeline";
 import { r2PresignedPutUrl, BUCKET_PRIVATE } from "@/lib/r2";
+import {
+  isMediaType,
+  maxBytesFor,
+  formatLimit,
+  isVideoType,
+} from "@/lib/mediaLimits";
 
 export const runtime = "nodejs";
 
-/**
- * GET /api/admin/ensaios/[id]/presign?filename=foo.jpg&type=image/jpeg
- *
- * Devolve uma URL assinada para PUT direto ao R2 privado, contornando o
- * limite de 4.5 MB do Vercel. O cliente faz o PUT e depois chama /upload
- * com o `originalKey` para acionar o processamento (watermark + thumb).
- *
- * `objectId` identifica o OBJETO no R2, não o registro no banco — o id do
- * registro só existe depois que /upload insere em media_items.
- */
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -36,15 +32,42 @@ export async function GET(
   }
 
   const { searchParams } = new URL(req.url);
-  const contentType = searchParams.get("type") ?? "application/octet-stream";
+  const contentType = searchParams.get("type") ?? "";
+  const size = Number(searchParams.get("size"));
+
+  if (!isMediaType(contentType)) {
+    return NextResponse.json(
+      {
+        error:
+          "Formato não suportado. Envie JPEG, PNG, WebP, HEIC, MP4, MOV ou WebM.",
+      },
+      { status: 400 },
+    );
+  }
+
+  if (!Number.isSafeInteger(size) || size <= 0) {
+    return NextResponse.json(
+      { error: "Informe o tamanho do arquivo." },
+      { status: 400 },
+    );
+  }
+
+  const limit = maxBytesFor(contentType);
+  if (size > limit) {
+    return NextResponse.json(
+      {
+        error: `${isVideoType(contentType) ? "Vídeo" : "Foto"} acima do limite de ${formatLimit(limit)}.`,
+      },
+      { status: 400 },
+    );
+  }
 
   const objectId = newObjectId();
   const { originalKey } = keysFor(galleryId, objectId);
-  const uploadUrl = await r2PresignedPutUrl(
-    BUCKET_PRIVATE,
-    originalKey,
-    contentType,
-  );
+  const uploadUrl = await r2PresignedPutUrl(BUCKET_PRIVATE, originalKey, contentType, {
+    contentLength: size,
+    expiresIn: 7200,
+  });
 
   return NextResponse.json({ uploadUrl, originalKey, objectId });
 }

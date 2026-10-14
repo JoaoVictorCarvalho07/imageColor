@@ -6,14 +6,19 @@ import {
   refreshAccessToken,
   parseFolderId,
   listFolderImages,
-  downloadFile,
+  downloadFileResilient,
+  type DriveSession,
 } from "@/lib/google";
+import { PHOTO_MAX_BYTES, formatLimit } from "@/lib/mediaLimits";
 import { storePhoto } from "@/lib/mediaPipeline";
 import { WATERMARK_TEXT } from "@/lib/studio";
 import { previewUrl } from "@/lib/storageUrl";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
+
+const STOP_STARTING_AFTER_MS = 270_000;
+const HARD_DEADLINE_MS = 290_000;
 
 export async function POST(
   req: NextRequest,
@@ -55,9 +60,13 @@ export async function POST(
     );
   }
 
-  let accessToken: string;
+  const refreshToken = decrypt(conn.refresh_token_encrypted);
+  let driveSession: DriveSession;
   try {
-    accessToken = await refreshAccessToken(decrypt(conn.refresh_token_encrypted));
+    driveSession = {
+      accessToken: await refreshAccessToken(refreshToken),
+      refreshToken,
+    };
   } catch {
     return NextResponse.json(
       { error: "Conexão com o Drive expirou. Reconecte o Google Drive." },
@@ -67,7 +76,7 @@ export async function POST(
 
   let files;
   try {
-    files = await listFolderImages(accessToken, folderId);
+    files = await listFolderImages(driveSession.accessToken, folderId);
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Falha ao listar a pasta." },
@@ -75,7 +84,6 @@ export async function POST(
     );
   }
 
-  // Evita reimportar o que já veio (por drive_file_id).
   const existing = await pb.collection("media_items").getFullList<{
     drive_file_id: string;
   }>({
@@ -90,44 +98,93 @@ export async function POST(
   });
   let position = all.totalItems;
 
+  if (gallery.drive_folder_id !== folderId) {
+    await pb
+      .collection("galleries")
+      .update(galleryId, { drive_folder_id: folderId })
+      .catch((err) =>
+        console.error("[drive-import] falha ao salvar a pasta", {
+          galleryId,
+          error: err instanceof Error ? err.message : err,
+        }),
+      );
+  }
+
   const skipped = files.length - toImport.length;
   const encoder = new TextEncoder();
+  const startedAt = Date.now();
 
   const stream = new ReadableStream({
     async start(controller) {
-      const send = (obj: unknown) =>
-        controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+      const send = (obj: unknown) => {
+        try {
+          controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+        } catch {}
+      };
 
       send({ type: "start", total: toImport.length, found: files.length, skipped });
 
       let imported = 0;
+      let failed = 0;
+      let processed = 0;
       try {
         for (const f of toImport) {
-          const buf = await downloadFile(accessToken, f.id);
-          const { thumbKey } = await storePhoto({
-            galleryId,
-            buffer: buf,
-            contentType: f.mimeType,
-            position: position++,
-            watermarkText: WATERMARK_TEXT,
-            driveFileId: f.id,
-            filename: f.name,
-          });
-          imported++;
-          send({
-            type: "item",
-            index: imported,
-            total: toImport.length,
-            name: f.name,
-            thumbUrl: previewUrl(thumbKey),
-          });
+          if (
+            req.signal.aborted ||
+            Date.now() - startedAt >= STOP_STARTING_AFTER_MS
+          ) {
+            break;
+          }
+          processed++;
+
+          try {
+            if (f.size && Number(f.size) > PHOTO_MAX_BYTES) {
+              throw new Error(`Acima do limite de ${formatLimit(PHOTO_MAX_BYTES)}.`);
+            }
+            const buf = await downloadFileResilient(driveSession, f.id, {
+              deadlineAt: startedAt + HARD_DEADLINE_MS,
+            });
+            const { thumbKey } = await storePhoto({
+              galleryId,
+              buffer: buf,
+              contentType: f.mimeType,
+              position,
+              watermarkText: WATERMARK_TEXT,
+              driveFileId: f.id,
+              filename: f.name,
+            });
+            position++;
+            imported++;
+            send({
+              type: "item",
+              index: imported,
+              total: toImport.length,
+              name: f.name,
+              thumbUrl: previewUrl(thumbKey),
+            });
+          } catch (e) {
+            failed++;
+            console.error("[drive-import] falha ao importar arquivo", {
+              galleryId,
+              driveFileId: f.id,
+              error: e instanceof Error ? e.message : e,
+            });
+            send({
+              type: "failed",
+              name: f.name,
+              message: e instanceof Error ? e.message : "Falha ao importar.",
+            });
+          }
         }
 
-        await pb
-          .collection("galleries")
-          .update(galleryId, { drive_folder_id: folderId });
-
-        send({ type: "done", imported, skipped, found: files.length });
+        send({
+          type: "done",
+          imported,
+          failed,
+          skipped,
+          found: files.length,
+          remaining: toImport.length - processed,
+        });
       } catch (e) {
         send({
           type: "error",
@@ -135,7 +192,9 @@ export async function POST(
           imported,
         });
       } finally {
-        controller.close();
+        try {
+          controller.close();
+        } catch {}
       }
     },
   });

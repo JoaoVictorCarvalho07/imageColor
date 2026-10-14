@@ -1,10 +1,11 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useId, useState } from "react";
 import {
   updateGalleryAction,
   type ActionState,
 } from "@/lib/galleryAdminActions";
+import { formatBRL, parseBRLToCents } from "@/lib/format";
 
 const initial: ActionState = {};
 
@@ -12,7 +13,7 @@ export interface GallerySettings {
   id: string;
   title: string;
   status: string;
-  accessExpiresAt: string | null; // YYYY-MM-DD
+  accessExpiresAt: string | null;
   downloadDays: number;
   selectionMode: "free" | "quota";
   selectionLimit: number | null;
@@ -34,6 +35,16 @@ export function GallerySettingsForm({ gallery }: { gallery: GallerySettings }) {
   const [delivery, setDelivery] = useState<"edit" | "direct">(
     gallery.deliveryMode,
   );
+  const [extraPhoto, setExtraPhoto] = useState(
+    gallery.extraPhotoCents != null
+      ? (gallery.extraPhotoCents / 100).toFixed(2).replace(".", ",")
+      : "",
+  );
+  const extraId = useId();
+  const extraHintId = `${extraId}-hint`;
+  const extraTouched = extraPhoto.trim() !== "";
+  const extraCents = parseBRLToCents(extraPhoto);
+  const extraInvalid = mode === "quota" && extraTouched && extraCents === 0;
 
   return (
     <form action={formAction} className="space-y-4">
@@ -89,7 +100,6 @@ export function GallerySettingsForm({ gallery }: { gallery: GallerySettings }) {
         </label>
       </div>
 
-      {/* Modo de seleção */}
       <div className="rounded-md border border-border bg-background p-3">
         <span className="label-caps">Seleção da cliente</span>
         <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -128,15 +138,24 @@ export function GallerySettingsForm({ gallery }: { gallery: GallerySettings }) {
             <input
               name="extraPhoto"
               inputMode="decimal"
-              defaultValue={
-                gallery.extraPhotoCents != null
-                  ? (gallery.extraPhotoCents / 100).toFixed(2)
-                  : ""
-              }
+              value={extraPhoto}
+              onChange={(e) => setExtraPhoto(e.target.value)}
               disabled={mode !== "quota"}
               placeholder="ex.: 25,00"
+              aria-invalid={extraInvalid ? true : undefined}
+              aria-describedby={extraHintId}
               className="w-full rounded-md border border-border bg-card px-3 py-2.5 text-foreground outline-none focus:border-accent disabled:opacity-40"
             />
+            <span
+              id={extraHintId}
+              className={`mt-1 block text-xs ${extraInvalid ? "text-destructive" : "text-muted-foreground"}`}
+            >
+              {extraInvalid
+                ? "Valor inválido. Use o formato 1.234,50."
+                : mode === "quota" && extraTouched
+                  ? `= ${formatBRL(extraCents)}`
+                  : "Aceita 25,00 ou 1.234,50."}
+            </span>
           </label>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
@@ -146,7 +165,6 @@ export function GallerySettingsForm({ gallery }: { gallery: GallerySettings }) {
         </p>
       </div>
 
-      {/* Destino das fotos selecionadas */}
       <div className="rounded-md border border-border bg-background p-3">
         <span className="label-caps">Destino da seleção</span>
         <label className="mt-2 block sm:max-w-xs">
@@ -174,13 +192,19 @@ export function GallerySettingsForm({ gallery }: { gallery: GallerySettings }) {
         <button
           type="submit"
           disabled={pending}
-          className="rounded-md bg-accent px-5 py-2.5 text-sm uppercase tracking-wide text-accent-foreground hover:opacity-90 disabled:opacity-60"
+          className="min-h-11 rounded-md bg-accent px-5 py-2.5 text-sm uppercase tracking-wide text-accent-foreground hover:opacity-90 disabled:opacity-60"
         >
           {pending ? "Salvando…" : "Salvar configurações"}
         </button>
-        {state.ok && <span className="text-sm text-accent">Salvo ✓</span>}
+        {state.ok && (
+          <span role="status" className="text-sm text-accent">
+            Salvo ✓
+          </span>
+        )}
         {state.error && (
-          <span className="text-sm text-destructive">{state.error}</span>
+          <span role="alert" className="text-sm text-destructive">
+            {state.error}
+          </span>
         )}
       </div>
     </form>

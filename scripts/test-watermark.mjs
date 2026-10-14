@@ -26,7 +26,6 @@ async function makeVariant(input, maxPx, text, opacity) {
     .toBuffer();
 }
 
-// "foto" de teste (tons da paleta da Bebel + formas)
 const W = 1600, H = 1200;
 const sampleSvg = Buffer.from(
   `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">

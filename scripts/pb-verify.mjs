@@ -1,13 +1,3 @@
-/**
- * Confere o schema REAL no servidor contra o que o app espera.
- *
- *   node --env-file=.env.local scripts/pb-verify.mjs         # só reporta
- *   node --env-file=.env.local scripts/pb-verify.mjs --fix   # aplica
- *
- * Existe porque `pb-setup.mjs` pula coleções já criadas: se o schema mudou
- * depois da primeira execução, o setup diz "ok" sem aplicar nada.
- */
-
 const PB_URL = process.env.POCKETBASE_URL;
 const EMAIL = process.env.POCKETBASE_ADMIN_EMAIL;
 const PASSWORD = process.env.POCKETBASE_ADMIN_PASSWORD;
@@ -17,18 +7,22 @@ if (!PB_URL || !EMAIL || !PASSWORD) {
   process.exit(1);
 }
 
-/** `coleção.campo` → propriedades que precisam bater. */
 const expected = {
   "media_items.gallery": { cascadeDelete: true },
   "pricing_plans.gallery": { cascadeDelete: true },
   "final_assets.gallery": { cascadeDelete: true },
   "gallery_sessions.gallery": { cascadeDelete: true },
   "selections.gallery": { cascadeDelete: true },
-  // Referências laterais: apagar a foto/plano NÃO pode apagar a seleção.
   "selections.media": { cascadeDelete: false },
   "selections.contracted_plan": { cascadeDelete: false },
-  // Informativo — se o /userinfo do Google falhar, vem vazio e obrigatório
-  // faria a conexão inteira do Drive ser rejeitada.
+  "selections.video_plan": { cascadeDelete: false },
+  "selections.amount_cents": {},
+  "orders.gallery": { cascadeDelete: true },
+  "orders.selection": { cascadeDelete: false },
+  "orders.amount_cents": { required: true },
+  "payment_events.key": { required: true },
+  "login_attempts.key": { required: true },
+  "login_attempts.window_start": { required: true },
   "drive_connections.google_account_email": { required: false },
 };
 
@@ -51,6 +45,38 @@ const { items } = await fetch(`${PB_URL}/api/collections?perPage=200`, {
 }).then((r) => r.json());
 
 const problems = [];
+
+const expectedIndexes = {
+  selections: "idx_selections_gallery_unique",
+  login_attempts: "idx_login_attempts_key",
+  payment_events: "idx_payment_events_key",
+};
+
+const USERS_RULES = ["listRule", "viewRule", "createRule", "updateRule", "deleteRule"];
+
+for (const [colName, idx] of Object.entries(expectedIndexes)) {
+  const col = items.find((c) => c.name === colName);
+  const ok = col?.indexes?.some((i) => i.includes(idx));
+  console.log(`${ok ? "✓" : "✗"} ${(colName + " índice " + idx).padEnd(40)} ${ok ? "presente" : "AUSENTE (rode pb-setup.mjs)"}`);
+  if (!ok) problems.push({ missing: `${colName} índice ${idx}` });
+}
+
+const users = items.find((c) => c.name === "users");
+if (!users) {
+  console.log("✗ users                                    NÃO ENCONTRADA");
+  problems.push({ missing: "users" });
+} else {
+  const openRules = USERS_RULES.filter((r) => users[r] !== null);
+  const passwordOn = users.passwordAuth?.enabled !== false;
+  const usersOk = openRules.length === 0 && !passwordOn;
+  console.log(
+    `${usersOk ? "✓" : "✗"} ${"users regras/passwordAuth".padEnd(40)} ${usersOk ? "travada" : "ABERTA: " + [...openRules, ...(passwordOn ? ["passwordAuth"] : [])].join(", ")}`,
+  );
+  if (!usersOk) problems.push({ usersLock: true, openRules, passwordOn, id: users.id });
+  if (users.oauth2?.enabled !== true) {
+    console.log("! users.oauth2 desligado — login do admin por Google não funciona");
+  }
+}
 
 for (const col of items) {
   for (const f of col.fields ?? []) {
@@ -96,6 +122,20 @@ if (!process.argv.includes("--fix")) {
 
 console.log("Corrigindo…");
 for (const p of problems) {
+  if (p.usersLock) {
+    const body = Object.fromEntries(p.openRules.map((r) => [r, null]));
+    if (p.passwordOn) {
+      const current = users.passwordAuth ?? {};
+      body.passwordAuth = { ...current, enabled: false };
+    }
+    const res = await fetch(`${PB_URL}/api/collections/${p.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: auth.token },
+      body: JSON.stringify(body),
+    });
+    console.log(res.ok ? "  ✓ users" : `  ✗ users: ${JSON.stringify(await res.json())}`);
+    continue;
+  }
   if (p.missing) continue;
   const col = items.find((c) => c.id === p.collectionId);
   const fields = col.fields.map((f) =>

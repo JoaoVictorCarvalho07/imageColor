@@ -1,4 +1,4 @@
-# 04 — Design System
+# 05 — Design System
 
 > A plataforma é sobre **imagens**. O design deve **desaparecer** e deixar as fotos brilharem:
 > muito espaço em branco, neutros suaves, tipografia elegante e UI minimalista.
@@ -82,7 +82,7 @@ Escala fluida (do site, `clamp`): `Display 2.5–4rem` · `H1 2–3rem` · `H2 1
 | **Player de vídeo** | Controles mínimos, overlay de marca d'água persistente. |
 | **Barra de seleção** | Rodapé fixo (mobile) com contador e CTA "Ver seleção". |
 | **Seletor de pacote** | Cards de opção (radio) com preço e quantidade inclusa. |
-| **Checkout Pix** | QR + botão copiar + status ao vivo. |
+| **Pagamento pendente** | Total, "Pagar agora", "Já paguei, verificar" e "Alterar seleção"; o checkout em si é a página do Mercado Pago. |
 | **Toast/feedback** | Confirmações sutis (item adicionado, link copiado). |
 | **Empty/erro/loading** | Skeletons na galeria; estados amigáveis. |
 

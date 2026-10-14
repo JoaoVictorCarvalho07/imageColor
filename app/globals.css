@@ -2,10 +2,6 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* ===================================================================
-   Design system — herdado do site da Isabel Pontes (Bebel)
-   Base marrom · accent verde floresta · detalhes dourados
-   =================================================================== */
 @theme {
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
@@ -35,6 +31,8 @@
   --color-gold: hsl(var(--gold));
   --color-gold-soft: hsl(var(--gold-soft));
   --color-bege: #f5e6d3;
+  --color-overlay: hsl(22 22% 8% / 0.96);
+  --color-watermark: hsl(var(--watermark));
 
   --font-display: var(--font-cormorant), Georgia, serif;
   --font-ui: var(--font-jost), system-ui, sans-serif;
@@ -45,7 +43,6 @@
   --radius-xl: 16px;
 }
 
-/* Tema claro (padrão) */
 :root {
   --background: 35 29% 92%;
   --foreground: 23 24% 9%;
@@ -74,9 +71,10 @@
 
   --gold: 43 38% 63%;
   --gold-soft: 43 52% 85%;
+
+  --watermark: 23 24% 9%;
 }
 
-/* Tema escuro (ativar com a classe .dark no <html>) */
 .dark {
   --background: 22 26% 18%;
   --foreground: 23.5 40% 89%;
@@ -115,11 +113,9 @@
   html {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    /* Evita o iOS inflar fontes ao girar/usar o celular. */
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
   }
-  /* Evita o zoom automático do iOS ao focar campos (fonte < 16px). */
   @media (max-width: 640px) {
     input,
     select,
@@ -131,10 +127,14 @@
     background: hsl(var(--background));
     color: hsl(var(--foreground));
     font-family: var(--font-ui);
-    min-height: 100vh;
+    min-height: 100dvh;
   }
 
-  /* Feedback de clique global: todo botão "afunda" levemente ao ser pressionado. */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+
   button {
     transition:
       transform 120ms ease,
@@ -156,7 +156,6 @@
 }
 
 @layer components {
-  /* Rótulo em caixa alta com tracking largo — assinatura do site */
   .label-caps {
     font-family: var(--font-ui);
     text-transform: uppercase;
@@ -168,6 +167,12 @@
 }
 
 @layer utilities {
+  .safe-bottom {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+  .safe-top {
+    padding-top: max(0.75rem, env(safe-area-inset-top));
+  }
   .scrollbar-none {
     -ms-overflow-style: none;
     scrollbar-width: none;

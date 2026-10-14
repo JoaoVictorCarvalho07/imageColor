@@ -3,12 +3,14 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Heart, Loader2, Sparkles, ChevronRight, Package } from "lucide-react";
+import { Heart, Loader2, Sparkles, ChevronRight, Package, CreditCard } from "lucide-react";
+import { formatBRL } from "@/lib/format";
 import { MediaTile } from "./MediaTile";
 import { Lightbox } from "./Lightbox";
 import { PackagesModal } from "./PackagesModal";
-import { useSelectedIds, useSelectionStore, useContractedPlan } from "@/store/selection";
-import { useHydrated } from "@/lib/useHydrated";
+import { flushSelection, useSelectionStore } from "@/store/selection";
+import { useGallerySelection } from "./useGallerySelection";
+import { SelectionNotice } from "./SelectionNotice";
 import type { MediaType, PublicGallery } from "@/lib/types";
 
 const PAGE_SIZE = 60;
@@ -21,28 +23,23 @@ export function GalleryView({ gallery }: { gallery: PublicGallery }) {
   const [showPackages, setShowPackages] = useState(false);
   const [pending, startTransition] = useTransition();
   const hasPlans = gallery.plans.length > 0;
-  const selectedIds = useSelectedIds(token);
+  const locked =
+    gallery.selectionStatus === "submitted" || gallery.selectionStatus === "paid";
+  const { photos, videos, entry, selectedSet, quote } = useGallerySelection(gallery, locked);
   const toggle = useSelectionStore((s) => s.toggle);
-  const contractPlan = useSelectionStore((s) => s.contractPlan);
-  const contractedPlan = useContractedPlan(token);
-  const hydrated = useHydrated();
+  const setPlan = useSelectionStore((s) => s.setPlan);
 
-  const photos = gallery.media.filter((m) => m.type === "photo");
-  const videos = gallery.media.filter((m) => m.type === "video");
   const visible = tab === "photo" ? photos : videos;
-  const count = hydrated ? Object.keys(selectedIds).length : 0;
+  const count = selectedSet.size;
+  const limit = quote.photos.allIncluded ? null : quote.photos.limit;
 
-  const baseLimit =
-    gallery.selectionMode === "quota" ? (gallery.selectionLimit ?? 0) : null;
-  const limit: number | null = (() => {
-    if (baseLimit === null) return null;
-    if (!contractedPlan || contractedPlan.mediaType !== "photo") return baseLimit;
-    if (contractedPlan.kind === "full") return null; // plano completo = sem limite
-    if (contractedPlan.kind === "package") return baseLimit + (contractedPlan.includedQty ?? 0);
-    return baseLimit; // single: sem alteração de cota
-  })();
+  function openSelection() {
+    startTransition(async () => {
+      await flushSelection(token);
+      router.push(`/g/${token}/selecao`);
+    });
+  }
 
-  // Paginação de render (centenas de fotos): mostra aos poucos.
   const [shown, setShown] = useState(PAGE_SIZE);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
@@ -65,21 +62,23 @@ export function GalleryView({ gallery }: { gallery: PublicGallery }) {
   const hasMore = shown < visible.length;
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-5xl flex-col">
+    <div className="mx-auto flex min-h-dvh max-w-5xl flex-col">
       <header className="sticky top-0 z-10 border-b border-border bg-background/95 px-5 pt-5 backdrop-blur">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="font-display text-2xl text-primary">{gallery.title}</h1>
-            <p className="label-caps">{gallery.studioName}</p>
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="truncate font-display text-2xl text-primary">{gallery.title}</h1>
+            <p className="label-caps truncate">{gallery.studioName}</p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-3">
             {hasPlans && (
               <button
                 type="button"
                 onClick={() => setShowPackages(true)}
                 className="inline-flex items-center gap-1.5 text-sm text-accent hover:underline"
               >
-                <Package className="h-4 w-4" /> Ver pacotes
+                <Package className="h-4 w-4" />
+                <span className="hidden sm:inline">Ver pacotes</span>
+                <span className="sm:hidden">Pacotes</span>
               </button>
             )}
             <div className="flex items-center gap-2 rounded-full border border-border bg-bege px-3 py-1.5">
@@ -104,6 +103,21 @@ export function GalleryView({ gallery }: { gallery: PublicGallery }) {
         </div>
       </header>
 
+      {gallery.payment.status === "pending" && (
+        <Link
+          href={`/g/${token}/selecao`}
+          className="mx-5 mt-4 flex items-center justify-between gap-2 rounded-md border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-accent hover:bg-accent/15"
+        >
+          <span className="inline-flex items-center gap-2">
+            <CreditCard className="h-4 w-4" />
+            Pagamento pendente · {formatBRL(gallery.payment.amountCents)}
+          </span>
+          <span className="inline-flex items-center gap-1 uppercase tracking-wide">
+            Pagar <ChevronRight className="h-4 w-4" />
+          </span>
+        </Link>
+      )}
+
       {gallery.downloadReady && (
         <Link
           href={`/g/${token}/entrega`}
@@ -127,7 +141,8 @@ export function GalleryView({ gallery }: { gallery: PublicGallery }) {
             <MediaTile
               key={item.id}
               item={item}
-              selected={hydrated && Boolean(selectedIds[item.id])}
+              index={i}
+              selected={selectedSet.has(item.id)}
               onToggle={() => toggle(token, item.id)}
               onOpen={() => setLightboxIndex(i)}
             />
@@ -147,17 +162,17 @@ export function GalleryView({ gallery }: { gallery: PublicGallery }) {
         )}
       </div>
 
-      <footer className="sticky bottom-0 border-t border-border bg-card/95 px-5 py-3 backdrop-blur">
+      <SelectionNotice token={token} />
+
+      <footer className="safe-bottom sticky bottom-0 border-t border-border bg-card/95 px-5 pt-3 backdrop-blur">
         <button
           type="button"
-          disabled={count === 0 || pending}
-          onClick={() =>
-            startTransition(() => router.push(`/g/${token}/selecao`))
-          }
+          disabled={(count === 0 && !locked) || pending}
+          onClick={openSelection}
           className="flex w-full items-center justify-center gap-2 rounded-md bg-accent py-3 text-center text-sm uppercase tracking-wide text-accent-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
         >
           {pending && <Loader2 className="h-4 w-4 animate-spin" />}
-          {pending ? "Abrindo…" : `Ver minha seleção (${count})`}
+          {pending ? "Abrindo…" : locked ? "Ver seleção enviada" : `Ver minha seleção (${count})`}
         </button>
       </footer>
 
@@ -173,14 +188,13 @@ export function GalleryView({ gallery }: { gallery: PublicGallery }) {
       {showPackages && (
         <PackagesModal
           plans={gallery.plans}
-          contractedPlanId={contractedPlan?.id ?? null}
-          onContract={(plan) => {
-            contractPlan(token, plan);
+          contracted={{ photo: entry.photoPlanId, video: entry.videoPlanId }}
+          locked={locked}
+          onContract={(mediaType, plan) => {
+            setPlan(token, mediaType, plan?.id ?? null);
             if (plan) {
               setShowPackages(false);
-              if (plan.kind === "full") {
-                startTransition(() => router.push(`/g/${token}/selecao`));
-              }
+              if (plan.kind === "full" && mediaType === "photo") openSelection();
             }
           }}
           onClose={() => setShowPackages(false)}

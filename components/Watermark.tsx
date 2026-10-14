@@ -1,5 +1,9 @@
+import { STUDIO_NAME } from "@/lib/studio";
+
+const DEFAULT_TEXT = STUDIO_NAME.toUpperCase();
+
 export function Watermark({
-  text = "ISABEL PONTES FOTOGRAFIA",
+  text = DEFAULT_TEXT,
   opacity = 0.33,
 }: {
   text?: string;
@@ -19,8 +23,7 @@ export function Watermark({
         {lines.map((_, i) => (
           <div
             key={i}
-            className="whitespace-nowrap text-[11px] tracking-wider"
-            style={{ color: "#2A1F18" }}
+            className="whitespace-nowrap text-[11px] tracking-wider text-watermark"
           >
             {`${text} · ${text} · ${text}`}
           </div>

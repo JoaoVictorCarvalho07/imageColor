@@ -1,8 +1,6 @@
-import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { Clock } from "lucide-react";
-import { sessionCookieName } from "@/lib/access";
-import { getGalleryPublicInfo } from "@/lib/clientGallery";
+import { getGalleryPublicInfo, hasActiveSession } from "@/lib/clientGallery";
 import { AccessForm } from "@/components/AccessForm";
 import { formatDateBR } from "@/lib/format";
 
@@ -15,8 +13,7 @@ export default async function AccessPage({
   const info = await getGalleryPublicInfo(token);
   if (!info) notFound();
 
-  const jar = await cookies();
-  if (jar.get(sessionCookieName(token))) {
+  if (await hasActiveSession(token)) {
     redirect(`/g/${token}/galeria`);
   }
 

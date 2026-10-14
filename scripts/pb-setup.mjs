@@ -1,17 +1,3 @@
-/**
- * Cria/atualiza o schema do PocketBase para o imageColor.
- *
- * Uso (lê as mesmas variáveis que a app usa):
- *   node --env-file=.env.local scripts/pb-setup.mjs
- *
- * Idempotente: coleções que já existem são puladas.
- *
- * NOTA sobre regras de acesso: todas as coleções ficam FECHADAS (rules = null,
- * só superuser). Todo acesso passa pelo servidor Next.js, que autentica como
- * superuser e faz o gating em código — mesmo papel que o `SECURITY DEFINER`
- * cumpria no Supabase. A cliente nunca fala direto com o PocketBase.
- */
-
 const PB_URL = process.env.POCKETBASE_URL;
 const EMAIL = process.env.POCKETBASE_ADMIN_EMAIL;
 const PASSWORD = process.env.POCKETBASE_ADMIN_PASSWORD;
@@ -29,14 +15,6 @@ const autodate = [
   { name: "updated", type: "autodate", onCreate: true, onUpdate: true },
 ];
 
-/**
- * `rel(nome, alvo)` — relação para outra coleção.
- *
- * `cascadeDelete: true` apaga ESTE registro quando o alvo some — certo para
- * "filho de galeria" (apagou o ensaio, some tudo dele). Para referências
- * laterais (a seleção citando fotos ou um pacote) tem que ser `false`, senão
- * apagar uma foto levaria junto a seleção inteira da cliente.
- */
 const rel = (
   name,
   target,
@@ -47,7 +25,7 @@ const rel = (
   required,
   maxSelect,
   cascadeDelete,
-  __target: target, // resolvido para collectionId antes do POST
+  __target: target,
 });
 
 const collections = [
@@ -176,8 +154,6 @@ const collections = [
   },
 
   {
-    // selection_items virou uma relação múltipla — o PocketBase resolve a
-    // junção sozinho, então a tabela intermediária do Postgres some.
     name: "selections",
     fields: [
       rel("gallery", "galleries"),
@@ -187,7 +163,6 @@ const collections = [
         maxSelect: 1,
         values: ["open", "submitted", "paid"],
       },
-      // cascadeDelete:false — apagar uma foto tira ela da lista, não apaga a seleção
       rel("media", "media_items", {
         required: false,
         maxSelect: 2000,
@@ -197,26 +172,115 @@ const collections = [
         required: false,
         cascadeDelete: false,
       }),
+      rel("video_plan", "pricing_plans", {
+        required: false,
+        cascadeDelete: false,
+      }),
       { name: "submitted_at", type: "date" },
+      { name: "amount_cents", type: "number" },
       ...autodate,
     ],
     indexes: [
       "CREATE INDEX `idx_selections_gallery` ON `selections` (`gallery`)",
+      "CREATE UNIQUE INDEX `idx_selections_gallery_unique` ON `selections` (`gallery`)",
     ],
   },
 
   {
     name: "drive_connections",
     fields: [
-      // Informativo (qual conta foi conectada). NÃO pode ser obrigatório: se
-      // o /userinfo do Google falhar, o campo vem vazio e a conexão inteira
-      // seria rejeitada.
       { name: "google_account_email", type: "email", required: false },
       { name: "refresh_token_encrypted", type: "text", required: true, max: 2000 },
       ...autodate,
     ],
   },
+
+  {
+    name: "login_attempts",
+    fields: [
+      { name: "key", type: "text", required: true, max: 200 },
+      { name: "count", type: "number" },
+      { name: "window_start", type: "date", required: true },
+      { name: "blocked_until", type: "date" },
+      ...autodate,
+    ],
+    indexes: [
+      "CREATE UNIQUE INDEX `idx_login_attempts_key` ON `login_attempts` (`key`)",
+    ],
+  },
+
+  {
+    name: "orders",
+    fields: [
+      rel("gallery", "galleries"),
+      rel("selection", "selections", { required: false, cascadeDelete: false }),
+      {
+        name: "status",
+        type: "select",
+        maxSelect: 1,
+        required: true,
+        values: ["pending", "paid", "cancelled", "refunded"],
+      },
+      { name: "amount_cents", type: "number", required: true },
+      { name: "media", type: "json", maxSize: 200000 },
+      { name: "photo_plan", type: "text", max: 50 },
+      { name: "video_plan", type: "text", max: 50 },
+      { name: "quote", type: "json", maxSize: 20000 },
+      { name: "preference_id", type: "text", max: 200 },
+      { name: "checkout_url", type: "url" },
+      { name: "payment_id", type: "text", max: 100 },
+      { name: "payment_status", type: "text", max: 50 },
+      { name: "payment_method", type: "text", max: 50 },
+      { name: "paid_at", type: "date" },
+      ...autodate,
+    ],
+    indexes: [
+      "CREATE INDEX `idx_orders_gallery` ON `orders` (`gallery`)",
+      "CREATE INDEX `idx_orders_status` ON `orders` (`gallery`, `status`)",
+    ],
+  },
+
+  {
+    name: "payment_events",
+    fields: [
+      { name: "key", type: "text", required: true, max: 200 },
+      rel("order", "orders", { required: false }),
+      { name: "payment_id", type: "text", max: 100 },
+      { name: "status", type: "text", max: 50 },
+      ...autodate,
+    ],
+    indexes: [
+      "CREATE UNIQUE INDEX `idx_payment_events_key` ON `payment_events` (`key`)",
+    ],
+  },
 ];
+
+const USERS_LOCKDOWN = {
+  listRule: null,
+  viewRule: null,
+  createRule: null,
+  updateRule: null,
+  deleteRule: null,
+};
+
+function indexName(sql) {
+  const m = /INDEX\s+(?:IF NOT EXISTS\s+)?[`"\[]?([A-Za-z0-9_]+)/i.exec(sql);
+  return m ? m[1] : sql;
+}
+
+function resolveFields(col, idByName) {
+  return col.fields.map((f) => {
+    if (!f.__target) return f;
+    const collectionId = idByName.get(f.__target);
+    if (!collectionId) {
+      throw new Error(
+        `Relação ${col.name}.${f.name} aponta para "${f.__target}", que ainda não existe.`,
+      );
+    }
+    const { __target, ...rest } = f;
+    return { ...rest, collectionId };
+  });
+}
 
 async function api(path, { method = "GET", body, token } = {}) {
   const res = await fetch(`${PB_URL}${path}`, {
@@ -237,6 +301,87 @@ async function api(path, { method = "GET", body, token } = {}) {
   return json;
 }
 
+async function ensureCollection(col, current, idByName, token) {
+  const haveFields = new Set(current.fields.map((f) => f.name));
+  const missingFields = resolveFields(col, idByName).filter(
+    (f) => !haveFields.has(f.name),
+  );
+
+  if (missingFields.length) {
+    await api(`/api/collections/${current.id}`, {
+      method: "PATCH",
+      token,
+      body: { fields: [...current.fields, ...missingFields] },
+    });
+    console.log(
+      `✓ ${col.name} — campos adicionados: ${missingFields.map((f) => f.name).join(", ")}`,
+    );
+  }
+
+  const currentIndexes = current.indexes ?? [];
+  const haveIndexes = new Set(currentIndexes.map(indexName));
+  const missingIndexes = (col.indexes ?? []).filter(
+    (i) => !haveIndexes.has(indexName(i)),
+  );
+
+  if (missingIndexes.length) {
+    try {
+      await api(`/api/collections/${current.id}`, {
+        method: "PATCH",
+        token,
+        body: { indexes: [...currentIndexes, ...missingIndexes] },
+      });
+      console.log(
+        `✓ ${col.name} — índices adicionados: ${missingIndexes.map(indexName).join(", ")}`,
+      );
+    } catch (err) {
+      process.exitCode = 1;
+      const idx = missingIndexes.map(indexName).join(", ");
+      console.error(`✗ ${col.name} — não foi possível criar o índice ${idx}.`);
+      console.error(
+        "  Se há registros duplicados na coluna do índice único, remova as duplicatas e rode de novo.",
+      );
+      console.error(err.message);
+    }
+  }
+
+  if (!missingFields.length && !missingIndexes.length) {
+    console.log(`· ${col.name} — em dia`);
+  }
+}
+
+async function lockDownUsers(token) {
+  const users = await api("/api/collections/users", { token });
+  const changes = [];
+  const body = {};
+
+  for (const [rule, wanted] of Object.entries(USERS_LOCKDOWN)) {
+    if (users[rule] !== wanted) {
+      body[rule] = wanted;
+      changes.push(`${rule}: ${JSON.stringify(users[rule])} → null`);
+    }
+  }
+
+  if (users.passwordAuth?.enabled !== false) {
+    body.passwordAuth = { ...users.passwordAuth, enabled: false };
+    changes.push("passwordAuth.enabled: true → false");
+  }
+
+  if (changes.length) {
+    await api(`/api/collections/${users.id}`, { method: "PATCH", token, body });
+    console.log("✓ users — travada:");
+    for (const c of changes) console.log(`    ${c}`);
+  } else {
+    console.log("· users — em dia");
+  }
+
+  if (users.oauth2?.enabled !== true) {
+    console.warn(
+      "! users.oauth2 está DESLIGADO — o login do admin por Google não vai funcionar. Ative no painel do PocketBase.",
+    );
+  }
+}
+
 async function main() {
   console.log(`→ Autenticando em ${PB_URL}`);
   const auth = await api("/api/collections/_superusers/auth-with-password", {
@@ -248,25 +393,14 @@ async function main() {
 
   const existing = await api("/api/collections?perPage=200", { token });
   const idByName = new Map(existing.items.map((c) => [c.name, c.id]));
+  const currentByName = new Map(existing.items.map((c) => [c.name, c]));
 
   for (const col of collections) {
-    if (idByName.has(col.name)) {
-      console.log(`· ${col.name} — já existe, pulando`);
+    const current = currentByName.get(col.name);
+    if (current) {
+      await ensureCollection(col, current, idByName, token);
       continue;
     }
-
-    // resolve as relações para o id real da coleção alvo
-    const fields = col.fields.map((f) => {
-      if (!f.__target) return f;
-      const collectionId = idByName.get(f.__target);
-      if (!collectionId) {
-        throw new Error(
-          `Relação ${col.name}.${f.name} aponta para "${f.__target}", que ainda não existe.`,
-        );
-      }
-      const { __target, ...rest } = f;
-      return { ...rest, collectionId };
-    });
 
     const created = await api("/api/collections", {
       method: "POST",
@@ -274,9 +408,8 @@ async function main() {
       body: {
         name: col.name,
         type: "base",
-        fields,
+        fields: resolveFields(col, idByName),
         indexes: col.indexes ?? [],
-        // fechadas: só o superuser (o servidor Next.js) acessa
         listRule: null,
         viewRule: null,
         createRule: null,
@@ -288,6 +421,8 @@ async function main() {
     idByName.set(col.name, created.id);
     console.log(`✓ ${col.name} — criada (${created.id})`);
   }
+
+  await lockDownUsers(token);
 
   console.log("\nSchema pronto.");
 }

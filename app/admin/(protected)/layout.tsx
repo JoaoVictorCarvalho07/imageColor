@@ -1,16 +1,19 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { Camera, LayoutDashboard, Plus } from "lucide-react";
 import { requireAdmin } from "@/lib/pb/session";
 import { STUDIO_NAME } from "@/lib/studio";
 import { LogoutButton } from "@/components/admin/LogoutButton";
 
+export const metadata: Metadata = {
+  robots: { index: false, follow: false },
+};
+
 export default async function AdminLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  // Verificação real da sessão (assinatura + allowlist). O middleware só faz
-  // a checagem otimista; é aqui que o acesso é de fato autorizado.
   await requireAdmin();
 
   return (

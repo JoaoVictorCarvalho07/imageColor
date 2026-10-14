@@ -3,14 +3,16 @@
 import { useState, useTransition } from "react";
 import { Plus, Trash2, Gift } from "lucide-react";
 import { savePlansAction, type PlanInput } from "@/lib/galleryAdminActions";
+import { parseBRLToCents } from "@/lib/format";
 
 export interface PlanRow {
+  id: string | null;
   mediaType: "photo" | "video";
   kind: "single" | "package" | "full";
   name: string;
   includedQty: string;
-  price: string; // em reais
-  extraItem: string; // em reais
+  price: string;
+  extraItem: string;
 }
 
 const KIND_LABEL: Record<PlanRow["kind"], string> = {
@@ -21,6 +23,7 @@ const KIND_LABEL: Record<PlanRow["kind"], string> = {
 
 function emptyRow(): PlanRow {
   return {
+    id: null,
     mediaType: "photo",
     kind: "package",
     name: "",
@@ -30,9 +33,7 @@ function emptyRow(): PlanRow {
   };
 }
 
-function toCents(v: string): number {
-  return Math.round((parseFloat(v.replace(",", ".")) || 0) * 100);
-}
+const toCents = parseBRLToCents;
 
 export function PricingEditor({
   galleryId,
@@ -53,23 +54,26 @@ export function PricingEditor({
 
   function save() {
     setMsg(null);
-    const plans: PlanInput[] = rows
-      .filter((r) => r.name.trim() || r.price)
-      .map((r) => ({
-        mediaType: r.mediaType,
-        kind: r.kind,
-        name: r.name.trim() || "Plano",
-        includedQty: r.kind === "package" ? parseInt(r.includedQty) || 0 : null,
-        priceCents: toCents(r.price),
-        extraItemCents: r.kind === "package" ? toCents(r.extraItem) : null,
-      }));
+    const kept = rows.filter((r) => r.name.trim() || r.price);
+    const plans: PlanInput[] = kept.map((r) => ({
+      id: r.id,
+      mediaType: r.mediaType,
+      kind: r.kind,
+      name: r.name.trim() || "Plano",
+      includedQty: r.kind === "package" ? parseInt(r.includedQty) || 0 : null,
+      priceCents: toCents(r.price),
+      extraItemCents:
+        r.kind === "package" && r.extraItem.trim() ? toCents(r.extraItem) : null,
+    }));
     startTransition(async () => {
       const res = await savePlansAction(galleryId, plans);
-      setMsg(
-        res.error
-          ? { ok: false, text: `Erro: ${res.error}` }
-          : { ok: true, text: "Preços salvos ✓" },
-      );
+      if (res.error) {
+        setMsg({ ok: false, text: `Erro: ${res.error}` });
+        return;
+      }
+      const ids = res.ids ?? [];
+      setRows(kept.length ? kept.map((r, i) => ({ ...r, id: ids[i] ?? r.id })) : [emptyRow()]);
+      setMsg({ ok: true, text: "Preços salvos ✓" });
     });
   }
 
@@ -86,6 +90,7 @@ export function PricingEditor({
             >
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-12">
                 <select
+                  aria-label="Tipo de mídia"
                   value={r.mediaType}
                   onChange={(e) =>
                     patch(i, { mediaType: e.target.value as PlanRow["mediaType"] })
@@ -97,6 +102,7 @@ export function PricingEditor({
                 </select>
 
                 <select
+                  aria-label="Tipo de plano"
                   value={r.kind}
                   onChange={(e) =>
                     patch(i, { kind: e.target.value as PlanRow["kind"] })
@@ -114,6 +120,7 @@ export function PricingEditor({
                   value={r.name}
                   onChange={(e) => patch(i, { name: e.target.value })}
                   placeholder="Nome do plano"
+                  aria-label="Nome do plano"
                   className="rounded-md border border-border bg-card px-2 py-2 text-sm sm:col-span-3"
                 />
 
@@ -125,6 +132,7 @@ export function PricingEditor({
                   min={0}
                   disabled={!isPackage}
                   title="Quantidade inclusa (pacotes)"
+                  aria-label="Quantidade inclusa"
                   className="rounded-md border border-border bg-card px-2 py-2 text-sm disabled:opacity-40 sm:col-span-1"
                 />
 
@@ -136,6 +144,7 @@ export function PricingEditor({
                     value={r.price}
                     onChange={(e) => patch(i, { price: e.target.value })}
                     placeholder="0,00"
+                    aria-label="Preço"
                     inputMode="decimal"
                     className="w-full rounded-md border border-border bg-card py-2 pl-7 pr-2 text-sm"
                   />
@@ -148,7 +157,8 @@ export function PricingEditor({
                     placeholder="extra"
                     inputMode="decimal"
                     disabled={!isPackage}
-                    title="Preço por item extra (pacotes)"
+                    title="Preço por item extra (pacotes). Em branco: sem extras além do incluso."
+                    aria-label="Preço por item extra"
                     className="w-full rounded-md border border-border bg-card px-2 py-2 text-sm disabled:opacity-40"
                   />
                 </div>

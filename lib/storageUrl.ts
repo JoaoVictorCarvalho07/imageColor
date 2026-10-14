@@ -1,7 +1,7 @@
-const R2_PUBLIC = process.env.CLOUDFLARE_R2_PUBLIC_URL;
+import "server-only";
 
-/** URL pública de um objeto no bucket de previews R2 (com marca d'água). */
 export function previewUrl(key: string | null | undefined): string | null {
-  if (!key || !R2_PUBLIC) return null;
-  return `${R2_PUBLIC}/${key}`;
+  const base = process.env.CLOUDFLARE_R2_PUBLIC_URL?.replace(/\/+$/, "");
+  if (!key || !base) return null;
+  return `${base}/${key}`;
 }

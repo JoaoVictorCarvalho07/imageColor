@@ -1,14 +1,6 @@
-/**
- * Teste direto do Resend — confirma que a API key está válida e que
- * o envio funciona para o e-mail do dono da conta.
- *
- * Uso: node scripts/test-email.mjs
- * (precisa de RESEND_API_KEY e EMAIL_FROM no .env.local, ou definidos abaixo)
- */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-// Carrega .env.local manualmente (sem depender de dotenv instalado)
 const envPath = resolve(process.cwd(), ".env.local");
 const env = Object.fromEntries(
   readFileSync(envPath, "utf-8")
@@ -21,7 +13,6 @@ const env = Object.fromEntries(
 
 const RESEND_API_KEY = env.RESEND_API_KEY;
 const EMAIL_FROM = env.EMAIL_FROM || "Isabel Pontes <onboarding@resend.dev>";
-// onboarding@resend.dev só entrega para o dono da conta Resend — use seu e-mail real
 const TO = "joaogotado@gmail.com";
 
 if (!RESEND_API_KEY) {

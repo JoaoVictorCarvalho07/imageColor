@@ -17,9 +17,6 @@ importers:
       archiver:
         specifier: ^8.0.0
         version: 8.0.0
-      clsx:
-        specifier: ^2.1.1
-        version: 2.1.1
       ffmpeg-static:
         specifier: ^5.3.0
         version: 5.3.0
@@ -47,9 +44,6 @@ importers:
       sharp:
         specifier: ^0.35.2
         version: 0.35.2
-      tailwind-merge:
-        specifier: ^2.6.0
-        version: 2.6.1
       zustand:
         specifier: ^5.0.3
         version: 5.0.14(@types/react@19.2.17)(react@19.2.7)
@@ -829,10 +823,6 @@ packages:
   client-only@0.0.1:
     resolution: {integrity: sha512-IV3Ou0jSMzZrd3pZ48nLkT9DA7Ag1pnPzaiQhpW7c3RbcqqzvzzVu+L8gfqMp/8IM2MQtSiqaCxrrcfu8I8rMA==}
 
-  clsx@2.1.1:
-    resolution: {integrity: sha512-eYm0QWBtUrBWZWG0d386OGAw16Z995PiOVo2B7bjWSbHedGl5e0ZWaq65kOGgUSNesEIDkB9ISbTg/JK9dhCZA==}
-    engines: {node: '>=6'}
-
   compress-commons@7.0.1:
     resolution: {integrity: sha512-g0S8KAD8qf4+V//pr3BfB1aBnARLXNz2Gx+jmHU0LEriUuoQUOPOulVquHKTJ8+EAIIO7fhseNDr9wK5Q9FKBQ==}
     engines: {node: '>=18'}
@@ -1165,9 +1155,6 @@ packages:
         optional: true
       babel-plugin-macros:
         optional: true
-
-  tailwind-merge@2.6.1:
-    resolution: {integrity: sha512-Oo6tHdpZsGpkKG88HJ8RR1rg/RdnEkQEfMoEk2x1XRI3F1AxeU+ijRXpiVUF4UbLfcxxRGw6TbUINKYdWVsQTQ==}
 
   tailwindcss@4.3.1:
     resolution: {integrity: sha512-hk+TB1m+K8CYNrP6rjQaq/Y+4Zylwpa87mLYBKCunwnnQ9p+fHb7kmSfGqyEJoxF/O6CDyABWVFEafNSYKll+Q==}
@@ -1956,8 +1943,6 @@ snapshots:
 
   client-only@0.0.1: {}
 
-  clsx@2.1.1: {}
-
   compress-commons@7.0.1:
     dependencies:
       crc-32: 1.2.2
@@ -2305,8 +2290,6 @@ snapshots:
     dependencies:
       client-only: 0.0.1
       react: 19.2.7
-
-  tailwind-merge@2.6.1: {}
 
   tailwindcss@4.3.1: {}
 
